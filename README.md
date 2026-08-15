@@ -166,3 +166,4 @@ Aplicar el esquema (aditivo, idempotente; nunca borra ni recrea nada) y sembrar 
 ## Política de secretos
 
 Nunca versionar credenciales, cadenas de conexión, claves ni tokens en este repositorio. La configuración sensible debe cargarse mediante variables de entorno o un secret store (por ejemplo, .NET User Secrets en desarrollo), nunca en `appsettings*.json` ni en archivos versionados. `.gitignore` excluye `.env*` (salvo `.env.example`) por la misma razón.
+test change
