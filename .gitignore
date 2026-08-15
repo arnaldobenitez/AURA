@@ -1,0 +1,51 @@
+# .NET
+bin/
+obj/
+out/
+publish/
+artifacts/
+*.user
+*.suo
+
+# Test results
+[Tt]est[Rr]esult*/
+coverage/
+*.trx
+*.coverage
+*.coveragexml
+
+# Node / frontend
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pfx
+*.pem
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Editor / OS
+.vs/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# VS Code (keep shared settings, ignore personal state)
+.vscode/*
+!.vscode/extensions.json
+
+# Publicacion y versionado
+/Versiones/
+
+# Proyecto independiente con su propio repo git, anidado en este directorio
+/Manual Aura/
