@@ -18,10 +18,4 @@
     <ProjectReference Include="..\AURA.Infrastructure\AURA.Infrastructure.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Content Update="appsettings.Development.json">
-      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
-    </Content>
-  </ItemGroup>
-
 </Project>

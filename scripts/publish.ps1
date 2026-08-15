@@ -185,7 +185,8 @@ Invoke-Step "dotnet publish (AURA.Api)" {
     dotnet publish $apiProject -c Release -o $publishTempDir --nologo
 }
 
-$removedFromTemp = Remove-ForbiddenFiles -Path $publishTempDir
+# TEST TEMPORAL: limpieza deshabilitada para probar el gate final
+$removedFromTemp = @()
 foreach ($file in $removedFromTemp) {
     Write-Host "  Eliminado del publish temporal: $file" -ForegroundColor Yellow
 }
