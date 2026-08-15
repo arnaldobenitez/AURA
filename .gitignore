@@ -25,6 +25,8 @@ dist-ssr/
 .env
 .env.*
 !.env.example
+# Non-secret, required for reproducible production builds (API base path under IIS)
+!src/AURA.Web/.env.production
 *.pfx
 *.pem
 
