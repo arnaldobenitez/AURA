@@ -288,6 +288,21 @@ body {
   cursor: progress;
 }
 
+.pc-sound-toggle {
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--aura-border);
+  background: var(--aura-surface);
+  color: var(--aura-text);
+  cursor: pointer;
+}
+
+.pc-sound-toggle:hover {
+  border-color: var(--aura-accent);
+}
+
 .pc-header__updated {
   white-space: nowrap;
 }
@@ -337,6 +352,30 @@ body {
   background: var(--aura-danger-bg);
   color: var(--aura-danger);
   font-size: 0.9rem;
+}
+
+.pc-audio-unlock-hint {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  background: var(--aura-pending-bg);
+  color: var(--aura-pending);
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.pc-audio-unlock-hint button {
+  font: inherit;
+  font-weight: 600;
+  padding: 0.3rem 0.7rem;
+  border-radius: 0.4rem;
+  border: 1px solid var(--aura-pending);
+  background: transparent;
+  color: var(--aura-pending);
+  cursor: pointer;
 }
 
 /* Summary cards */

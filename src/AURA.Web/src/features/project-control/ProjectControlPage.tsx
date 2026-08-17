@@ -1,12 +1,14 @@
 import { HealthIndicator } from "./HealthIndicator";
 import { ProjectGrid } from "./ProjectGrid";
 import { SummaryCards } from "./SummaryCards";
+import { useProjectControlAlerts } from "./useProjectControlAlerts";
 import { useProjectControlBoard } from "./useProjectControlBoard";
 
 const lastUpdatedFormatter = new Intl.DateTimeFormat("es-AR", { dateStyle: "medium", timeStyle: "medium" });
 
 export function ProjectControlPage() {
   const { board, isLoading, error, lastUpdated, refresh } = useProjectControlBoard();
+  const { soundEnabled, setSoundEnabled, needsAudioUnlock, unlockAudio } = useProjectControlAlerts(board);
 
   const isInitialLoading = board === null && isLoading;
 
@@ -19,6 +21,15 @@ export function ProjectControlPage() {
         <div className="pc-header__meta">
           <span className="pc-header__tenant">Tenant 1</span>
           <HealthIndicator />
+          <button
+            type="button"
+            className="pc-sound-toggle"
+            onClick={() => setSoundEnabled(!soundEnabled)}
+            aria-pressed={soundEnabled}
+            title={soundEnabled ? "Silenciar alertas sonoras" : "Activar alertas sonoras"}
+          >
+            {soundEnabled ? "🔊" : "🔇"}
+          </button>
           <button type="button" className="pc-refresh-button" onClick={() => void refresh()} disabled={isLoading}>
             {isLoading ? "Actualizando…" : "Actualizar"}
           </button>
@@ -29,6 +40,15 @@ export function ProjectControlPage() {
       </header>
 
       <main className="pc-main">
+        {needsAudioUnlock && (
+          <p className="pc-audio-unlock-hint" role="status">
+            El navegador bloqueó la reproducción automática de sonido.{" "}
+            <button type="button" onClick={unlockAudio}>
+              Click para activar los avisos sonoros
+            </button>
+          </p>
+        )}
+
         {error && (
           <p className="pc-error-banner" role="alert">
             {error} Mostrando los últimos datos disponibles.
