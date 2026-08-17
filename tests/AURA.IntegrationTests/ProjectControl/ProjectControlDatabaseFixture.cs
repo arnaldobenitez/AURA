@@ -126,7 +126,39 @@ public sealed class ProjectControlDatabaseFixture : IAsyncLifetime
         return (long)result!;
     }
 
-    public async Task<int> CreateProjectAsync(int tenantId, string code, string name)
+    public async Task SetItemProgressAsync(
+        int tenantId,
+        int projectId,
+        long itemId,
+        string execDescription,
+        string stage,
+        decimal stageProgress,
+        decimal execProgress)
+    {
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE ProProyectosItems
+            SET sDescripcion = @execDescription,
+                sEtapa = @stage,
+                nPorcEtapa = @stageProgress,
+                nPorcEXEC = @execProgress
+            WHERE idTenant = @tenantId AND IdProyecto = @projectId AND IdItems = @itemId;
+            """;
+        command.Parameters.AddWithValue("@tenantId", tenantId);
+        command.Parameters.AddWithValue("@projectId", projectId);
+        command.Parameters.AddWithValue("@itemId", itemId);
+        command.Parameters.AddWithValue("@execDescription", execDescription);
+        command.Parameters.AddWithValue("@stage", stage);
+        command.Parameters.AddWithValue("@stageProgress", stageProgress);
+        command.Parameters.AddWithValue("@execProgress", execProgress);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task<int> CreateProjectAsync(int tenantId, string code, string name, byte status = 1)
     {
         await using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync();
@@ -140,11 +172,12 @@ public sealed class ProjectControlDatabaseFixture : IAsyncLifetime
             SELECT
                 @tenantId,
                 ISNULL((SELECT MAX(IdProyecto) FROM ProProyectosCabecera WHERE idTenant = @tenantId), 0) + 1,
-                @name, NULL, CAST(SYSUTCDATETIME() AS date), NULL, 1, @code, NULL;
+                @name, NULL, CAST(SYSUTCDATETIME() AS date), NULL, @status, @code, NULL;
             """;
         command.Parameters.AddWithValue("@tenantId", tenantId);
         command.Parameters.AddWithValue("@name", name);
         command.Parameters.AddWithValue("@code", code);
+        command.Parameters.AddWithValue("@status", status);
 
         var result = await command.ExecuteScalarAsync();
         return (int)result!;

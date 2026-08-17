@@ -11,6 +11,7 @@ public static class ProjectControlCodes
 {
     public static string ToCode(ProjectStatus value) => value switch
     {
+        ProjectStatus.Draft => "DRAFT",
         ProjectStatus.Active => "ACTIVE",
         ProjectStatus.Paused => "PAUSED",
         ProjectStatus.Blocked => "BLOCKED",

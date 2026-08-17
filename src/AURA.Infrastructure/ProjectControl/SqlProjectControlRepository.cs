@@ -33,6 +33,10 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
             li.nHumano,
             li.nControlTipo,
             li.nControlId,
+            li.sDescripcion,
+            li.sEtapa,
+            li.nPorcEtapa,
+            li.nPorcEXEC,
             li.sResumen,
             li.sProximaAccion,
             li.sBloqueo,
@@ -49,6 +53,7 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
             SELECT TOP (1)
                 i.IdItems, i.dFechaEntrada, i.nTipoEvento, i.nEstadoTrabajo, i.nActorTipo,
                 i.nCodificador, i.nAnalista, i.nHumano, i.nControlTipo, i.nControlId,
+                i.sDescripcion, i.sEtapa, i.nPorcEtapa, i.nPorcEXEC,
                 i.sResumen, i.sProximaAccion, i.sBloqueo, i.sReferencia, i.sModelo
             FROM dbo.ProProyectosItems i
             WHERE i.idTenant = c.idTenant AND i.IdProyecto = c.IdProyecto
@@ -304,6 +309,10 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
         }
 
         var summary = ReadNullableString(reader, "sResumen");
+        var execDescription = ReadNullableString(reader, "sDescripcion");
+        var currentStage = ReadNullableString(reader, "sEtapa");
+        var stageProgress = ReadNullableDecimal(reader, "nPorcEtapa");
+        var execProgress = ReadNullableDecimal(reader, "nPorcEXEC");
         var nextAction = ReadNullableString(reader, "sProximaAccion");
         var blocker = ReadNullableString(reader, "sBloqueo");
         var reference = ReadNullableString(reader, "sReferencia");
@@ -322,6 +331,10 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
             lastModel,
             currentControlType,
             currentControlName,
+            execDescription,
+            currentStage,
+            stageProgress,
+            execProgress,
             summary,
             nextAction,
             blocker,
@@ -395,6 +408,12 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
         }
 
         return DateTime.SpecifyKind(reader.GetDateTime(ordinal), DateTimeKind.Utc);
+    }
+
+    private static decimal? ReadNullableDecimal(SqlDataReader reader, string column)
+    {
+        var ordinal = reader.GetOrdinal(column);
+        return reader.IsDBNull(ordinal) ? null : reader.GetDecimal(ordinal);
     }
 
     private static string? ReadNullableString(SqlDataReader reader, string column)

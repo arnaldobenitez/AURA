@@ -41,6 +41,28 @@ public sealed class ProjectControlEndpointTests(ProjectControlDatabaseFixture fi
     }
 
     [SkippableFact]
+    public async Task GetBoard_MapsProjectStatusValuesUsedByTheGrid()
+    {
+        RequireDatabase(fixture);
+        await fixture.ResetTestDataAsync();
+
+        await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "DRAFT", "Borrador", 0);
+        await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "ACTIVE", "Activo", 1);
+        await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "PAUSED", "Suspendido", 2);
+        await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "BLOCKED", "Bloqueado", 3);
+        await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "COMPLETED", "Cerrado", 4);
+
+        var board = await fixture.Client.GetFromJsonAsync<ProjectControlBoardDto>(
+            $"/api/project-control?tenantId={ProjectControlDatabaseFixture.PrimaryTenantId}", JsonOptions);
+
+        Assert.Equal("DRAFT", Assert.Single(board!.Projects, p => p.ProjectCode == "DRAFT").ProjectStatus);
+        Assert.Equal("ACTIVE", Assert.Single(board.Projects, p => p.ProjectCode == "ACTIVE").ProjectStatus);
+        Assert.Equal("PAUSED", Assert.Single(board.Projects, p => p.ProjectCode == "PAUSED").ProjectStatus);
+        Assert.Equal("BLOCKED", Assert.Single(board.Projects, p => p.ProjectCode == "BLOCKED").ProjectStatus);
+        Assert.Equal("COMPLETED", Assert.Single(board.Projects, p => p.ProjectCode == "COMPLETED").ProjectStatus);
+    }
+
+    [SkippableFact]
     public async Task GetBoard_MultipleEvents_ReturnsOnlyTheMostRecentOne()
     {
         RequireDatabase(fixture);
@@ -61,6 +83,40 @@ public sealed class ProjectControlEndpointTests(ProjectControlDatabaseFixture fi
         var project = Assert.Single(board!.Projects, p => p.ProjectCode == "MULTIEVENT");
         Assert.Equal("Tercer avance (el último)", project.Summary);
         Assert.Equal(3, project.LastItemId);
+    }
+
+    [SkippableFact]
+    public async Task GetBoard_LatestItem_ReturnsExecAndStageProgress()
+    {
+        RequireDatabase(fixture);
+        await fixture.ResetTestDataAsync();
+        var projectId = await fixture.CreateProjectAsync(
+            ProjectControlDatabaseFixture.PrimaryTenantId, "EXECSTAGE", "EXEC con etapas");
+
+        var itemId = await PostEventAsync(
+            ProjectControlDatabaseFixture.PrimaryTenantId,
+            "EXECSTAGE",
+            Guid.NewGuid(),
+            null,
+            "Avance de etapa");
+
+        await fixture.SetItemProgressAsync(
+            ProjectControlDatabaseFixture.PrimaryTenantId,
+            projectId,
+            itemId!.Value,
+            "Incorporar seguimiento por etapas",
+            "Actualizar la grilla de control",
+            62.50m,
+            25m);
+
+        var board = await fixture.Client.GetFromJsonAsync<ProjectControlBoardDto>(
+            $"/api/project-control?tenantId={ProjectControlDatabaseFixture.PrimaryTenantId}", JsonOptions);
+
+        var project = Assert.Single(board!.Projects, p => p.ProjectCode == "EXECSTAGE");
+        Assert.Equal("Incorporar seguimiento por etapas", project.ExecDescription);
+        Assert.Equal("Actualizar la grilla de control", project.CurrentStage);
+        Assert.Equal(62.50m, project.StageProgress);
+        Assert.Equal(25m, project.ExecProgress);
     }
 
     [SkippableFact]

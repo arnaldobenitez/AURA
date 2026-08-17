@@ -1,4 +1,4 @@
-export type ProjectStatusCode = "ACTIVE" | "PAUSED" | "BLOCKED" | "COMPLETED" | "ARCHIVED" | "UNKNOWN";
+export type ProjectStatusCode = "DRAFT" | "ACTIVE" | "PAUSED" | "BLOCKED" | "COMPLETED" | "ARCHIVED" | "UNKNOWN";
 export type ProjectEventTypeCode = "CLAIM" | "PROGRESS" | "HANDOFF" | "BLOCKER" | "COMPLETION";
 export type ProjectWorkStatusCode = "IN_PROGRESS" | "BLOCKED" | "COMPLETED";
 export type ProjectActorTypeCode = "UNASSIGNED" | "HUMAN" | "AI_ANALYST" | "CODER";
@@ -17,6 +17,10 @@ export interface ProjectControlProject {
   lastModel: string | null;
   currentControlType: ProjectActorTypeCode | null;
   currentControlName: string | null;
+  execDescription: string | null;
+  currentStage: string | null;
+  stageProgress: number | null;
+  execProgress: number | null;
   summary: string | null;
   nextAction: string | null;
   blocker: string | null;

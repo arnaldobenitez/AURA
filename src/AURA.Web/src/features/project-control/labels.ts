@@ -6,10 +6,11 @@ import type {
 } from "../../lib/projectControl";
 
 export const projectStatusLabels: Record<ProjectStatusCode, string> = {
+  DRAFT: "Borrador",
   ACTIVE: "Activo",
-  PAUSED: "Pausado",
+  PAUSED: "Suspendido",
   BLOCKED: "Bloqueado",
-  COMPLETED: "Completado",
+  COMPLETED: "Cerrado",
   ARCHIVED: "Archivado",
   UNKNOWN: "Desconocido",
 };
@@ -35,18 +36,31 @@ export const eventTypeLabels: Record<ProjectEventTypeCode, string> = {
   COMPLETION: "Finalización",
 };
 
-export function formatDateTimeUtc(value: string | null): string {
+export interface FormattedDateTime {
+  date: string;
+  time: string;
+}
+
+export function formatDateTimeUtc(value: string | null): FormattedDateTime | null {
   if (!value) {
-    return "Sin actividad";
+    return null;
   }
 
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return "Sin actividad";
+    return null;
   }
 
-  return new Intl.DateTimeFormat("es-AR", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
+  return {
+    date: new Intl.DateTimeFormat("es-AR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }).format(date),
+    time: new Intl.DateTimeFormat("es-AR", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).format(date),
+  };
 }

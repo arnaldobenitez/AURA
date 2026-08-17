@@ -112,6 +112,18 @@ public sealed class ProjectControlSchemaMigrator(
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosItems') AND name = 'sModelo')
                 ALTER TABLE dbo.ProProyectosItems ADD sModelo nvarchar(100) NULL;
             """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosItems') AND name = 'nPorcEXEC')
+                ALTER TABLE dbo.ProProyectosItems ADD nPorcEXEC decimal(18, 2) NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosItems') AND name = 'nPorcEtapa')
+                ALTER TABLE dbo.ProProyectosItems ADD nPorcEtapa decimal(18, 2) NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosItems') AND name = 'sEtapa')
+                ALTER TABLE dbo.ProProyectosItems ADD sEtapa varchar(100) NULL;
+            """,
 
             // Uniqueness / idempotency indexes (filtered so historical/legacy NULLs never collide)
             """
