@@ -1,5 +1,6 @@
 import type {
   ProjectActorTypeCode,
+  ProjectAgentCode,
   ProjectEventTypeCode,
   ProjectStatusCode,
   ProjectWorkStatusCode,
@@ -29,12 +30,36 @@ export const workStatusLabels: Record<ProjectWorkStatusCode, string> = {
 };
 
 export const eventTypeLabels: Record<ProjectEventTypeCode, string> = {
+  REQUEST: "Solicitud",
   CLAIM: "Inicio",
   PROGRESS: "Avance",
   HANDOFF: "Handoff",
   BLOCKER: "Bloqueo",
+  APPROVAL: "Aprobación",
+  REWORK: "Retrabajo",
   COMPLETION: "Finalización",
+  DEPLOYMENT: "Publicación",
 };
+
+// Catalogo de nombres "bonitos" para los codigos legacy que todavia se graban en
+// mayusculas (CODEX, CLAUDE_CODE...). No es un enum cerrado: un agente nuevo que no
+// este en este diccionario simplemente se muestra tal cual llego (texto libre), en vez
+// de romper o quedar sin mostrarse - ver "no closed enum" en la correccion del circuito.
+const knownAgentLabels: Record<string, string> = {
+  UNASSIGNED: "Sin asignar",
+  CODEX: "Codex",
+  CLAUDE_CODE: "Claude Code",
+  GROK: "Grok",
+  DEVIN: "Devin",
+};
+
+export function formatAgentLabel(agent: ProjectAgentCode | null | undefined): string | null {
+  if (!agent || agent === "UNASSIGNED") {
+    return null;
+  }
+
+  return knownAgentLabels[agent] ?? agent;
+}
 
 export interface FormattedDateTime {
   date: string;

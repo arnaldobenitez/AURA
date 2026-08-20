@@ -7,10 +7,21 @@ public sealed class ProjectControlService(IProjectControlRepository repository)
     private const int SummaryMaxLength = 300;
     private const int LongTextMaxLength = 1000;
     private const int ModelMaxLength = 100;
+    private const int StageMaxLength = 100;
+    private const int EnvironmentMaxLength = 100;
+    private const int ProjectCodeMaxLength = 50;
+    private const int ProjectNameMaxLength = 100;
+    private const int DescriptionMaxLength = 500;
+    private const int RepositoryMaxLength = 2000;
 
     public Task<IReadOnlyList<ProjectControlProjectDto>> GetBoardAsync(int tenantId, CancellationToken cancellationToken)
     {
         return repository.GetBoardAsync(tenantId, cancellationToken);
+    }
+
+    public Task<ProjectHistoryDto?> GetHistoryAsync(int tenantId, string projectCode, CancellationToken cancellationToken)
+    {
+        return repository.GetHistoryAsync(tenantId, projectCode.Trim(), cancellationToken);
     }
 
     public async Task<RegisterProjectEventResult> RegisterEventAsync(
@@ -32,9 +43,14 @@ public sealed class ProjectControlService(IProjectControlRepository repository)
             eventType,
             actorType,
             request.Actor.Id,
+            NullIfWhiteSpace(request.Agent),
+            NullIfWhiteSpace(request.Environment),
             status,
             request.Summary.Trim(),
             NullIfWhiteSpace(request.Details),
+            NullIfWhiteSpace(request.Stage),
+            request.StageProgress,
+            request.TotalStages,
             nextControlType,
             request.NextControl?.Id,
             NullIfWhiteSpace(request.NextAction),
@@ -54,6 +70,10 @@ public sealed class ProjectControlService(IProjectControlRepository repository)
                 new RegisterProjectEventResult(RegisterProjectEventStatus.ProjectNotFound, null, null, null),
             ProjectEventOutcomeStatus.Conflict =>
                 new RegisterProjectEventResult(RegisterProjectEventStatus.Conflict, null, outcome.CurrentLastItemId, null),
+            ProjectEventOutcomeStatus.InvalidTransition =>
+                new RegisterProjectEventResult(
+                    RegisterProjectEventStatus.ValidationFailed, null, null,
+                    [outcome.ErrorMessage ?? "La transición solicitada no es válida."]),
             _ => throw new InvalidOperationException($"Unhandled outcome status '{outcome.Status}'."),
         };
     }
@@ -100,6 +120,23 @@ public sealed class ProjectControlService(IProjectControlRepository repository)
             errors.Add($"model no puede superar {ModelMaxLength} caracteres.");
         }
 
+        if (request.Stage is { } stage && stage.Trim().Length > StageMaxLength)
+        {
+            errors.Add($"stage no puede superar {StageMaxLength} caracteres.");
+        }
+
+        if (request.Environment is { } environment && environment.Trim().Length > EnvironmentMaxLength)
+        {
+            errors.Add($"environment no puede superar {EnvironmentMaxLength} caracteres.");
+        }
+
+        if (request.TotalStages is { } totalStages && totalStages <= 0)
+        {
+            errors.Add("totalStages debe ser mayor a cero.");
+        }
+
+        ValidatePercentage(request.StageProgress, nameof(request.StageProgress), errors);
+
         if (!ProjectControlCodes.TryParseEventType(request.EventType, out eventType))
         {
             errors.Add($"eventType '{request.EventType}' no es válido.");
@@ -118,6 +155,35 @@ public sealed class ProjectControlService(IProjectControlRepository repository)
         else if (actorType != ProjectActorType.Unassigned && request.Actor.Id is null)
         {
             errors.Add("actor.id es obligatorio cuando actor.type no es UNASSIGNED.");
+        }
+
+        if ((eventType == ProjectEventType.Approval || eventType == ProjectEventType.Request)
+            && actorType != ProjectActorType.Human)
+        {
+            errors.Add($"eventType '{request.EventType}' solo puede registrarlo un actor HUMAN.");
+        }
+
+        if (request.Agent is { } agent && agent.Trim().Length > EnvironmentMaxLength)
+        {
+            errors.Add($"agent no puede superar {EnvironmentMaxLength} caracteres.");
+        }
+
+        // Toda intervencion no humana debe poder identificarse: agente, modelo y entorno
+        // no son opcionales para CODER/AI_ANALYST (si son UNASSIGNED, no aplica).
+        if (actorType is ProjectActorType.Coder or ProjectActorType.AiAnalyst)
+        {
+            if (string.IsNullOrWhiteSpace(request.Agent))
+            {
+                errors.Add("agent es obligatorio para intervenciones no humanas.");
+            }
+            if (string.IsNullOrWhiteSpace(request.Model))
+            {
+                errors.Add("model es obligatorio para intervenciones no humanas.");
+            }
+            if (string.IsNullOrWhiteSpace(request.Environment))
+            {
+                errors.Add("environment es obligatorio para intervenciones no humanas.");
+            }
         }
 
         nextControlType = null;
@@ -148,6 +214,120 @@ public sealed class ProjectControlService(IProjectControlRepository repository)
         }
     }
 
+    private static void ValidatePercentage(decimal? value, string fieldName, List<string> errors)
+    {
+        if (value is not { } percentage)
+        {
+            return;
+        }
+
+        if (percentage < 0 || percentage > 100)
+        {
+            errors.Add($"{fieldName} debe estar entre 0 y 100.");
+            return;
+        }
+
+        if (decimal.Truncate(percentage * 100m) != percentage * 100m)
+        {
+            errors.Add($"{fieldName} admite hasta dos decimales.");
+        }
+    }
+
     private static string? NullIfWhiteSpace(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    public async Task<CreateProjectResult> CreateProjectAsync(
+        CreateProjectRequest request,
+        CancellationToken cancellationToken)
+    {
+        var errors = ValidateCreateProject(request, out var code, out var status);
+
+        if (errors.Count > 0)
+        {
+            return new CreateProjectResult(CreateProjectResultStatus.ValidationFailed, null, errors);
+        }
+
+        var command = new CreateProjectCommand(
+            request.TenantId,
+            code,
+            request.ProjectName.Trim(),
+            NullIfWhiteSpace(request.Description),
+            NullIfWhiteSpace(request.WorkingPath),
+            NullIfWhiteSpace(request.Repository),
+            status,
+            request.HumanResponsibleId);
+
+        var outcome = await repository.CreateProjectAsync(command, cancellationToken);
+
+        return outcome.Status switch
+        {
+            CreateProjectOutcomeStatus.Created =>
+                new CreateProjectResult(CreateProjectResultStatus.Created, outcome.ProjectId, null),
+            CreateProjectOutcomeStatus.AlreadyExists =>
+                new CreateProjectResult(CreateProjectResultStatus.AlreadyExists, outcome.ProjectId, null),
+            CreateProjectOutcomeStatus.Conflict =>
+                new CreateProjectResult(CreateProjectResultStatus.Conflict, outcome.ProjectId, null),
+            _ => throw new InvalidOperationException($"Unhandled outcome status '{outcome.Status}'."),
+        };
+    }
+
+    private static List<string> ValidateCreateProject(
+        CreateProjectRequest request,
+        out string code,
+        out ProjectStatus status)
+    {
+        var errors = new List<string>();
+
+        if (request.TenantId <= 0)
+        {
+            errors.Add("tenantId debe ser mayor a cero.");
+        }
+
+        code = string.IsNullOrWhiteSpace(request.ProjectCode) ? string.Empty : request.ProjectCode.Trim().ToUpperInvariant();
+        if (code.Length == 0)
+        {
+            errors.Add("projectCode es obligatorio.");
+        }
+        else if (code.Length > ProjectCodeMaxLength)
+        {
+            errors.Add($"projectCode no puede superar {ProjectCodeMaxLength} caracteres.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.ProjectName))
+        {
+            errors.Add("projectName es obligatorio.");
+        }
+        else if (request.ProjectName.Trim().Length > ProjectNameMaxLength)
+        {
+            errors.Add($"projectName no puede superar {ProjectNameMaxLength} caracteres.");
+        }
+
+        if (request.Description is { } description && description.Length > DescriptionMaxLength)
+        {
+            errors.Add($"description no puede superar {DescriptionMaxLength} caracteres.");
+        }
+
+        ValidateOptionalLength(request.WorkingPath, nameof(request.WorkingPath), errors);
+
+        if (request.Repository is { } repository && repository.Length > RepositoryMaxLength)
+        {
+            errors.Add($"repository no puede superar {RepositoryMaxLength} caracteres.");
+        }
+
+        if (request.HumanResponsibleId is { } humanResponsibleId && humanResponsibleId <= 0)
+        {
+            errors.Add("humanResponsibleId debe ser mayor a cero.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Status))
+        {
+            status = ProjectStatus.Active;
+        }
+        else if (!ProjectControlCodes.TryParseProjectStatus(request.Status, out status))
+        {
+            errors.Add($"status '{request.Status}' no es válido.");
+        }
+
+        return errors;
+    }
 }

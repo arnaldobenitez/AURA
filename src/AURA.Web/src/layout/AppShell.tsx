@@ -1,10 +1,15 @@
 import type { ReactNode } from "react";
 import { Sidebar } from "./Sidebar";
 
-export function AppShell({ children }: { children: ReactNode }) {
+interface AppShellProps {
+  children: ReactNode;
+  onNavigate?: (path: string) => void;
+}
+
+export function AppShell({ children, onNavigate }: AppShellProps) {
   return (
     <div className="app-shell">
-      <Sidebar />
+      <Sidebar onNavigate={onNavigate} />
       <div className="app-shell__content">{children}</div>
     </div>
   );

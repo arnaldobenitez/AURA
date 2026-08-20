@@ -1,16 +1,30 @@
+import { useState } from "react";
+import { CreateProjectModal } from "./CreateProjectModal";
 import { HealthIndicator } from "./HealthIndicator";
 import { ProjectGrid } from "./ProjectGrid";
 import { SummaryCards } from "./SummaryCards";
 import { useProjectControlAlerts } from "./useProjectControlAlerts";
 import { useProjectControlBoard } from "./useProjectControlBoard";
+import type { ProjectControlProject } from "../../lib/projectControl";
 
 const lastUpdatedFormatter = new Intl.DateTimeFormat("es-AR", { dateStyle: "medium", timeStyle: "medium" });
+const TENANT_ID = 1;
+const HIGHLIGHT_DURATION_MS = 4_000;
 
-export function ProjectControlPage() {
+export function ProjectControlPage({ onProjectSelect }: { onProjectSelect: (project: ProjectControlProject) => void }) {
   const { board, isLoading, error, lastUpdated, refresh } = useProjectControlBoard();
   const { soundEnabled, setSoundEnabled, needsAudioUnlock, unlockAudio } = useProjectControlAlerts(board);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [highlightedProjectId, setHighlightedProjectId] = useState<number | null>(null);
 
   const isInitialLoading = board === null && isLoading;
+
+  const handleProjectCreated = (projectId: number) => {
+    setIsCreateModalOpen(false);
+    void refresh();
+    setHighlightedProjectId(projectId);
+    window.setTimeout(() => setHighlightedProjectId(null), HIGHLIGHT_DURATION_MS);
+  };
 
   return (
     <div className="pc-page">
@@ -29,6 +43,14 @@ export function ProjectControlPage() {
             title={soundEnabled ? "Silenciar alertas sonoras" : "Activar alertas sonoras"}
           >
             {soundEnabled ? "🔊" : "🔇"}
+          </button>
+          <button
+            type="button"
+            className="pc-sound-toggle"
+            onClick={() => setIsCreateModalOpen(true)}
+            title="Nuevo proyecto"
+          >
+            +
           </button>
           <button type="button" className="pc-refresh-button" onClick={() => void refresh()} disabled={isLoading}>
             {isLoading ? "Actualizando…" : "Actualizar"}
@@ -60,10 +82,21 @@ export function ProjectControlPage() {
         {!isInitialLoading && board && (
           <>
             <SummaryCards projects={board.projects} />
-            <ProjectGrid projects={board.projects} />
+            <ProjectGrid
+              projects={board.projects}
+              highlightedProjectId={highlightedProjectId}
+              onProjectSelect={onProjectSelect}
+            />
           </>
         )}
       </main>
+
+      <CreateProjectModal
+        open={isCreateModalOpen}
+        tenantId={TENANT_ID}
+        onClose={() => setIsCreateModalOpen(false)}
+        onCreated={handleProjectCreated}
+      />
     </div>
   );
 }

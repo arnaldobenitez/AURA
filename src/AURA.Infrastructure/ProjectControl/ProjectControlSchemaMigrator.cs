@@ -24,6 +24,7 @@ public sealed class ProjectControlSchemaMigrator(
         ("TURNOMEDIX", "TurnoMedix", null),
         ("MANDADINI", "Mandadini", null),
         ("POLICURSOS", "Policursos", null),
+        ("ARTERIO", "Arterio", @"d:\Desarrollos\SmartPhones\Arterio"),
     ];
 
     private const int TenantId = 1;
@@ -123,6 +124,75 @@ public sealed class ProjectControlSchemaMigrator(
             """
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosItems') AND name = 'sEtapa')
                 ALTER TABLE dbo.ProProyectosItems ADD sEtapa varchar(100) NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosCabecera') AND name = 'nHumanoResponsable')
+                ALTER TABLE dbo.ProProyectosCabecera ADD nHumanoResponsable int NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosItems') AND name = 'nAgente')
+                ALTER TABLE dbo.ProProyectosItems ADD nAgente tinyint NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosItems') AND name = 'sEntorno')
+                ALTER TABLE dbo.ProProyectosItems ADD sEntorno nvarchar(100) NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosItems') AND name = 'nTotalEtapas')
+                ALTER TABLE dbo.ProProyectosItems ADD nTotalEtapas int NULL;
+            """,
+
+            // Identidad real de EXEC/etapa (reemplaza el matching por texto de sEtapa) +
+            // agente en texto libre + referencia a quien tiene el control activo.
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosItems') AND name = 'IdEXEC')
+                ALTER TABLE dbo.ProProyectosItems ADD IdEXEC int NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosItems') AND name = 'IdEtapa')
+                ALTER TABLE dbo.ProProyectosItems ADD IdEtapa int NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosItems') AND name = 'sAgente')
+                ALTER TABLE dbo.ProProyectosItems ADD sAgente nvarchar(100) NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosItems') AND name = 'IdControlItem')
+                ALTER TABLE dbo.ProProyectosItems ADD IdControlItem bigint NULL;
+            """,
+
+            // ProProyectoEXEC / ProProyectoEtapa: entidades nuevas con identidad estable
+            // (no existian antes de esta version).
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ProProyectoEXEC' AND schema_id = SCHEMA_ID('dbo'))
+                CREATE TABLE dbo.ProProyectoEXEC (
+                    idTenant int NOT NULL,
+                    IdProyecto int NOT NULL,
+                    IdEXEC int NOT NULL,
+                    sDescripcion nvarchar(500) NULL,
+                    nEstado tinyint NOT NULL,
+                    nTotalEtapas int NULL,
+                    nHumanoResponsable int NULL,
+                    dFechaInicio datetime2 NULL,
+                    dFechaFin datetime2 NULL,
+                    CONSTRAINT PK_ProProyectoEXEC PRIMARY KEY (idTenant, IdProyecto, IdEXEC)
+                );
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ProProyectoEtapa' AND schema_id = SCHEMA_ID('dbo'))
+                CREATE TABLE dbo.ProProyectoEtapa (
+                    idTenant int NOT NULL,
+                    IdProyecto int NOT NULL,
+                    IdEXEC int NOT NULL,
+                    IdEtapa int NOT NULL,
+                    nOrden int NOT NULL,
+                    sDescripcion nvarchar(200) NOT NULL,
+                    nPorcEtapa decimal(18, 2) NULL,
+                    nEstado tinyint NOT NULL,
+                    dFechaAprobacion datetime2 NULL,
+                    nHumanoAprobador int NULL,
+                    CONSTRAINT PK_ProProyectoEtapa PRIMARY KEY (idTenant, IdProyecto, IdEXEC, IdEtapa)
+                );
             """,
 
             // Uniqueness / idempotency indexes (filtered so historical/legacy NULLs never collide)

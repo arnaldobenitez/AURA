@@ -7,4 +7,8 @@ public enum ProjectEventType
     Handoff = 3,
     Blocker = 4,
     Completion = 5,
+    Request = 6,
+    Approval = 7,
+    Rework = 8,
+    Deployment = 9,
 }

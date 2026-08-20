@@ -116,7 +116,225 @@ public sealed class ProjectControlEndpointTests(ProjectControlDatabaseFixture fi
         Assert.Equal("Incorporar seguimiento por etapas", project.ExecDescription);
         Assert.Equal("Actualizar la grilla de control", project.CurrentStage);
         Assert.Equal(62.50m, project.StageProgress);
+        // El EXEC creado por el evento inicial no tiene nTotalEtapas (no se informo totalStages).
+        Assert.Null(project.TotalStages);
+        // nPorcEXEC es una fotografia grabada en el evento (hallazgo 11): se lee tal cual,
+        // incluso cuando fue seteado directo por SQL bypaseando la API.
         Assert.Equal(25m, project.ExecProgress);
+    }
+
+    [SkippableFact]
+    public async Task RegisterEvent_WithStageAndProgress_PersistsThemViaTheApi()
+    {
+        RequireDatabase(fixture);
+        await fixture.ResetTestDataAsync();
+        await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "EXECWRITE", "EXEC escribible");
+
+        await PostEventAsync(
+            ProjectControlDatabaseFixture.PrimaryTenantId,
+            "EXECWRITE",
+            Guid.NewGuid(),
+            null,
+            "Avance con etapa",
+            stage: "Etapa 2 de 5",
+            stageProgress: 40m,
+            totalStages: 5);
+
+        var board = await fixture.Client.GetFromJsonAsync<ProjectControlBoardDto>(
+            $"/api/project-control?tenantId={ProjectControlDatabaseFixture.PrimaryTenantId}", JsonOptions);
+
+        var project = Assert.Single(board!.Projects, p => p.ProjectCode == "EXECWRITE");
+        Assert.Equal("Etapa 2 de 5", project.CurrentStage);
+        Assert.Equal(40m, project.StageProgress);
+        Assert.Equal(5, project.TotalStages);
+        // Nadie aprobo (APPROVAL) ninguna etapa todavia, asi que el EXEC sigue en 0%, no null.
+        Assert.Equal(0, project.ClosedStages);
+        Assert.Equal(0m, project.ExecProgress);
+    }
+
+    [SkippableFact]
+    public async Task RegisterEvent_FirstEventWithoutStageOrProgress_StaysNull()
+    {
+        RequireDatabase(fixture);
+        await fixture.ResetTestDataAsync();
+        await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "NOEXEC", "Sin EXEC informado");
+
+        var response = await PostEventRawAsync(
+            ProjectControlDatabaseFixture.PrimaryTenantId, "NOEXEC", Guid.NewGuid(), null, "Avance sin etapa");
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+
+        var board = await fixture.Client.GetFromJsonAsync<ProjectControlBoardDto>(
+            $"/api/project-control?tenantId={ProjectControlDatabaseFixture.PrimaryTenantId}", JsonOptions);
+
+        var project = Assert.Single(board!.Projects, p => p.ProjectCode == "NOEXEC");
+        Assert.Null(project.CurrentStage);
+        Assert.Null(project.StageProgress);
+        Assert.Null(project.TotalStages);
+        Assert.Null(project.ExecProgress);
+    }
+
+    [SkippableFact]
+    public async Task RegisterEvent_SubsequentEventWithoutStage_InheritsPreviousStageAndProgress()
+    {
+        RequireDatabase(fixture);
+        await fixture.ResetTestDataAsync();
+        await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "INHERITEXEC", "Hereda EXEC vigente");
+
+        var firstItemId = await PostEventAsync(
+            ProjectControlDatabaseFixture.PrimaryTenantId, "INHERITEXEC", Guid.NewGuid(), null,
+            "Primer avance", stage: "Etapa 1", stageProgress: 30m, totalStages: 4);
+
+        // El segundo evento no manda stage/stageProgress/totalStages: no deben perderse.
+        await PostEventAsync(
+            ProjectControlDatabaseFixture.PrimaryTenantId, "INHERITEXEC", Guid.NewGuid(), firstItemId,
+            "Segundo avance, sin repetir la etapa");
+
+        var board = await fixture.Client.GetFromJsonAsync<ProjectControlBoardDto>(
+            $"/api/project-control?tenantId={ProjectControlDatabaseFixture.PrimaryTenantId}", JsonOptions);
+
+        var project = Assert.Single(board!.Projects, p => p.ProjectCode == "INHERITEXEC");
+        Assert.Equal("Segundo avance, sin repetir la etapa", project.Summary);
+        Assert.Equal("Etapa 1", project.CurrentStage);
+        Assert.Equal(30m, project.StageProgress);
+        Assert.Equal(4, project.TotalStages);
+    }
+
+    [SkippableFact]
+    public async Task RegisterEvent_ProgressOutOfRange_ReturnsValidationFailed()
+    {
+        RequireDatabase(fixture);
+        await fixture.ResetTestDataAsync();
+        await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "OUTOFRANGE", "Fuera de rango");
+
+        var response = await PostEventRawAsync(
+            ProjectControlDatabaseFixture.PrimaryTenantId, "OUTOFRANGE", Guid.NewGuid(), null, "Avance invalido",
+            stageProgress: 150m);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("VALIDATION_FAILED", body.GetProperty("status").GetString());
+    }
+
+    [SkippableFact]
+    public async Task RegisterEvent_ProgressWithMoreThanTwoDecimals_ReturnsValidationFailed()
+    {
+        RequireDatabase(fixture);
+        await fixture.ResetTestDataAsync();
+        await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "TOOMANYDEC", "Demasiados decimales");
+
+        var response = await PostEventRawAsync(
+            ProjectControlDatabaseFixture.PrimaryTenantId, "TOOMANYDEC", Guid.NewGuid(), null, "Avance invalido",
+            stageProgress: 33.333m);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [SkippableFact]
+    public async Task RegisterEvent_ApprovalByNonHumanActor_ReturnsValidationFailed()
+    {
+        RequireDatabase(fixture);
+        await fixture.ResetTestDataAsync();
+        await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "APPROVALCODER", "Aprobacion invalida");
+
+        var response = await PostEventRawAsync(
+            ProjectControlDatabaseFixture.PrimaryTenantId, "APPROVALCODER", Guid.NewGuid(), null, "Intento de aprobar",
+            actorType: "CODER", eventType: "APPROVAL", stage: "Etapa 1");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("VALIDATION_FAILED", body.GetProperty("status").GetString());
+    }
+
+    [SkippableFact]
+    public async Task RegisterEvent_RequestByNonHumanActor_ReturnsValidationFailed()
+    {
+        RequireDatabase(fixture);
+        await fixture.ResetTestDataAsync();
+        await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "REQUESTCODER", "Solicitud invalida");
+
+        var response = await PostEventRawAsync(
+            ProjectControlDatabaseFixture.PrimaryTenantId, "REQUESTCODER", Guid.NewGuid(), null, "Intento de solicitar",
+            actorType: "AI_ANALYST", eventType: "REQUEST");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [SkippableFact]
+    public async Task RegisterEvent_AgentAndEnvironment_PersistAndReadBackOnBoard()
+    {
+        RequireDatabase(fixture);
+        await fixture.ResetTestDataAsync();
+        await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "AGENTENV", "Agente y entorno");
+
+        await PostEventAsync(
+            ProjectControlDatabaseFixture.PrimaryTenantId, "AGENTENV", Guid.NewGuid(), null,
+            "Codificando con Claude Code", actorType: "CODER", actorId: 1, model: "Sonnet 5",
+            agent: "CLAUDE_CODE", environment: "VS Code");
+
+        var board = await fixture.Client.GetFromJsonAsync<ProjectControlBoardDto>(
+            $"/api/project-control?tenantId={ProjectControlDatabaseFixture.PrimaryTenantId}", JsonOptions);
+
+        var project = Assert.Single(board!.Projects, p => p.ProjectCode == "AGENTENV");
+        Assert.Equal("CLAUDE_CODE", project.LastAgent);
+        Assert.Equal("VS Code", project.LastEnvironment);
+        Assert.Equal("Sonnet 5", project.LastModel);
+    }
+
+    [SkippableFact]
+    public async Task RegisterEvent_FiveOfTenStagesApproved_ExecProgressIsFiftyPercent()
+    {
+        RequireDatabase(fixture);
+        await fixture.ResetTestDataAsync();
+        await fixture.CreateUsuarioAsync(ProjectControlDatabaseFixture.PrimaryTenantId, 801, "Arnaldo Benitez");
+        await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "TENSTAGES", "Diez etapas");
+
+        long? previous = null;
+        for (var i = 1; i <= 5; i++)
+        {
+            var stageName = $"Etapa {i}";
+
+            var progressItemId = await PostEventAsync(
+                ProjectControlDatabaseFixture.PrimaryTenantId, "TENSTAGES", Guid.NewGuid(), previous,
+                $"Avance tecnico de {stageName}", stage: stageName, stageProgress: 100m,
+                totalStages: i == 1 ? 10 : null);
+            previous = progressItemId;
+
+            var approvalItemId = await PostEventAsync(
+                ProjectControlDatabaseFixture.PrimaryTenantId, "TENSTAGES", Guid.NewGuid(), previous,
+                $"Aprobacion de {stageName}", actorType: "HUMAN", actorId: 801, eventType: "APPROVAL", stage: stageName);
+            previous = approvalItemId;
+        }
+
+        var board = await fixture.Client.GetFromJsonAsync<ProjectControlBoardDto>(
+            $"/api/project-control?tenantId={ProjectControlDatabaseFixture.PrimaryTenantId}", JsonOptions);
+
+        var project = Assert.Single(board!.Projects, p => p.ProjectCode == "TENSTAGES");
+        Assert.Equal(10, project.TotalStages);
+        Assert.Equal(5, project.ClosedStages);
+        Assert.Equal(50.00m, project.ExecProgress);
+    }
+
+    [SkippableFact]
+    public async Task GetBoard_NoExplicitHandoff_ControlFallsBackToCurrentActor()
+    {
+        RequireDatabase(fixture);
+        await fixture.ResetTestDataAsync();
+        await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "SELFCONTROL", "Control propio");
+
+        await PostEventAsync(
+            ProjectControlDatabaseFixture.PrimaryTenantId, "SELFCONTROL", Guid.NewGuid(), null,
+            "Claude Code toma el control", actorType: "CODER", actorId: 1, model: "Sonnet 5",
+            agent: "CLAUDE_CODE", environment: "VS Code", eventType: "CLAIM");
+
+        var board = await fixture.Client.GetFromJsonAsync<ProjectControlBoardDto>(
+            $"/api/project-control?tenantId={ProjectControlDatabaseFixture.PrimaryTenantId}", JsonOptions);
+
+        var project = Assert.Single(board!.Projects, p => p.ProjectCode == "SELFCONTROL");
+        Assert.Equal("CODER", project.CurrentControlType);
+        Assert.Equal("CLAUDE_CODE", project.CurrentControlAgent);
+        Assert.Equal("Sonnet 5", project.CurrentControlModel);
+        Assert.Equal("VS Code", project.CurrentControlEnvironment);
     }
 
     [SkippableFact]
@@ -128,7 +346,8 @@ public sealed class ProjectControlEndpointTests(ProjectControlDatabaseFixture fi
 
         await PostEventAsync(
             ProjectControlDatabaseFixture.PrimaryTenantId, "NOCATALOG", Guid.NewGuid(), null,
-            "Evento con codificador inexistente", actorType: "CODER", actorId: 987654);
+            "Evento con codificador inexistente", actorType: "CODER", actorId: 987654, model: "Sonnet 5",
+            agent: "CODEX", environment: "Codex CLI");
 
         var board = await fixture.Client.GetFromJsonAsync<ProjectControlBoardDto>(
             $"/api/project-control?tenantId={ProjectControlDatabaseFixture.PrimaryTenantId}", JsonOptions);
@@ -202,11 +421,14 @@ public sealed class ProjectControlEndpointTests(ProjectControlDatabaseFixture fi
 
     private async Task<long?> PostEventAsync(
         int tenantId, string projectCode, Guid eventId, long? previousItemId, string summary,
-        string actorType = "CODER", int actorId = 1, string? model = null,
-        string? nextControlType = null, int? nextControlId = null)
+        string actorType = "HUMAN", int actorId = 1, string? model = null,
+        string? nextControlType = null, int? nextControlId = null,
+        string? stage = null, decimal? stageProgress = null, int? totalStages = null,
+        string eventType = "PROGRESS", string? agent = null, string? environment = null)
     {
         var response = await PostEventRawAsync(
-            tenantId, projectCode, eventId, previousItemId, summary, actorType, actorId, model, nextControlType, nextControlId);
+            tenantId, projectCode, eventId, previousItemId, summary, actorType, actorId, model,
+            nextControlType, nextControlId, stage, stageProgress, totalStages, eventType, agent, environment);
         response.EnsureSuccessStatusCode();
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         return body.GetProperty("itemId").GetInt64();
@@ -214,19 +436,26 @@ public sealed class ProjectControlEndpointTests(ProjectControlDatabaseFixture fi
 
     private Task<HttpResponseMessage> PostEventRawAsync(
         int tenantId, string projectCode, Guid eventId, long? expectedPreviousItemId, string summary,
-        string actorType = "CODER", int actorId = 1, string? model = null,
-        string? nextControlType = null, int? nextControlId = null)
+        string actorType = "HUMAN", int actorId = 1, string? model = null,
+        string? nextControlType = null, int? nextControlId = null,
+        string? stage = null, decimal? stageProgress = null, int? totalStages = null,
+        string eventType = "PROGRESS", string? agent = null, string? environment = null)
     {
         var request = new RegisterProjectEventRequest(
             tenantId,
             projectCode,
             eventId,
             expectedPreviousItemId,
-            "PROGRESS",
+            eventType,
             new ProjectActorRefDto(actorType, actorId),
+            agent,
+            environment,
             "IN_PROGRESS",
             summary,
             null,
+            stage,
+            stageProgress,
+            totalStages,
             nextControlType is null ? null : new ProjectActorRefDto(nextControlType, nextControlId),
             null,
             null,
@@ -245,7 +474,8 @@ public sealed class ProjectControlEndpointTests(ProjectControlDatabaseFixture fi
 
         await PostEventAsync(
             ProjectControlDatabaseFixture.PrimaryTenantId, "CODEXMODEL", Guid.NewGuid(), null,
-            "Avance de Codex", actorType: "CODER", actorId: 501, model: "Sonnet 5");
+            "Avance de Codex", actorType: "CODER", actorId: 501, model: "Sonnet 5",
+            agent: "CODEX", environment: "Codex CLI");
 
         var board = await fixture.Client.GetFromJsonAsync<ProjectControlBoardDto>(
             $"/api/project-control?tenantId={ProjectControlDatabaseFixture.PrimaryTenantId}", JsonOptions);
@@ -264,7 +494,8 @@ public sealed class ProjectControlEndpointTests(ProjectControlDatabaseFixture fi
 
         await PostEventAsync(
             ProjectControlDatabaseFixture.PrimaryTenantId, "GROKMODEL", Guid.NewGuid(), null,
-            "Avance de Grok", actorType: "AI_ANALYST", actorId: 502, model: "Fable");
+            "Avance de Grok", actorType: "AI_ANALYST", actorId: 502, model: "Fable",
+            agent: "GROK", environment: "Grok Web");
 
         var board = await fixture.Client.GetFromJsonAsync<ProjectControlBoardDto>(
             $"/api/project-control?tenantId={ProjectControlDatabaseFixture.PrimaryTenantId}", JsonOptions);
@@ -306,6 +537,7 @@ public sealed class ProjectControlEndpointTests(ProjectControlDatabaseFixture fi
         await PostEventAsync(
             ProjectControlDatabaseFixture.PrimaryTenantId, "HANDOFFHUMAN", Guid.NewGuid(), null,
             "Handoff hacia humano", actorType: "CODER", actorId: 1, model: "Sonnet 5",
+            agent: "CLAUDE_CODE", environment: "VS Code",
             nextControlType: "HUMAN", nextControlId: 602);
 
         var board = await fixture.Client.GetFromJsonAsync<ProjectControlBoardDto>(
@@ -327,7 +559,8 @@ public sealed class ProjectControlEndpointTests(ProjectControlDatabaseFixture fi
 
         await PostEventAsync(
             ProjectControlDatabaseFixture.PrimaryTenantId, "HANDOFFNOCAT", Guid.NewGuid(), null,
-            "Handoff hacia humano inexistente", actorType: "CODER", actorId: 1,
+            "Handoff hacia humano inexistente", actorType: "CODER", actorId: 1, model: "Sonnet 5",
+            agent: "CLAUDE_CODE", environment: "VS Code",
             nextControlType: "HUMAN", nextControlId: 987654);
 
         var board = await fixture.Client.GetFromJsonAsync<ProjectControlBoardDto>(

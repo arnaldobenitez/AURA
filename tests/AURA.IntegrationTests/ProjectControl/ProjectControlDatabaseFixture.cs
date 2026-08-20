@@ -70,11 +70,32 @@ public sealed class ProjectControlDatabaseFixture : IAsyncLifetime
             """
             SET QUOTED_IDENTIFIER ON;
             DELETE FROM ProProyectosItems WHERE idTenant IN (@t1, @t2);
+            DELETE FROM ProProyectoEtapa WHERE idTenant IN (@t1, @t2);
+            DELETE FROM ProProyectoEXEC WHERE idTenant IN (@t1, @t2);
             DELETE FROM ProProyectosCabecera WHERE idTenant IN (@t1, @t2);
             DELETE FROM Usuarios WHERE IdTenant IN (@t1, @t2);
+            DELETE FROM ProCodificadores WHERE IdTenant IN (@t1, @t2);
             """;
         command.Parameters.AddWithValue("@t1", PrimaryTenantId);
         command.Parameters.AddWithValue("@t2", SecondaryTenantId);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// Inserts a legacy ProCodificadores catalog row directly - used to reproduce rows whose
+    /// sNombre actually describes an environment (e.g. "Vs Code"), not a person.
+    /// </summary>
+    public async Task CreateCodificadorAsync(int tenantId, int idCodificador, string name)
+    {
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "INSERT INTO ProCodificadores (IdTenant, IdCodificador, sNombre) VALUES (@tenantId, @id, @name);";
+        command.Parameters.AddWithValue("@tenantId", tenantId);
+        command.Parameters.AddWithValue("@id", idCodificador);
+        command.Parameters.AddWithValue("@name", name);
         await command.ExecuteNonQueryAsync();
     }
 

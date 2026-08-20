@@ -28,6 +28,61 @@ public sealed class ProjectControlController(ProjectControlService projectContro
         return Ok(new ProjectControlBoardDto(tenantId, DateTime.UtcNow, projects));
     }
 
+    [HttpGet("projects/{projectCode}/events")]
+    public async Task<ActionResult<ProjectHistoryDto>> GetHistory(
+        string projectCode,
+        [FromQuery] int tenantId,
+        CancellationToken cancellationToken)
+    {
+        if (tenantId <= 0)
+        {
+            return Problem(
+                title: "tenantId inválido.",
+                detail: "tenantId debe ser un entero mayor a cero.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        var history = await projectControlService.GetHistoryAsync(tenantId, projectCode, cancellationToken);
+        if (history is null)
+        {
+            return Problem(
+                title: "Proyecto no encontrado.",
+                detail: "No existe un proyecto con ese tenantId y projectCode.",
+                statusCode: StatusCodes.Status404NotFound);
+        }
+
+        return Ok(history);
+    }
+
+    [HttpPost("projects")]
+    public async Task<IActionResult> CreateProject(
+        [FromBody] CreateProjectRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await projectControlService.CreateProjectAsync(request, cancellationToken);
+
+        switch (result.Status)
+        {
+            case CreateProjectResultStatus.Created:
+                return StatusCode(
+                    StatusCodes.Status201Created,
+                    new CreateProjectResponse("CREATED", result.ProjectId));
+
+            case CreateProjectResultStatus.AlreadyExists:
+                return Ok(new CreateProjectResponse("ALREADY_EXISTS", result.ProjectId));
+
+            case CreateProjectResultStatus.Conflict:
+                return Conflict(new CreateProjectResponse("CONFLICT", result.ProjectId));
+
+            case CreateProjectResultStatus.ValidationFailed:
+                return BadRequest(new ProjectControlValidationProblemResponse(
+                    "VALIDATION_FAILED", result.ValidationErrors ?? []));
+
+            default:
+                throw new InvalidOperationException($"Unhandled result status '{result.Status}'.");
+        }
+    }
+
     [HttpPost("events")]
     public async Task<IActionResult> RegisterEvent(
         [FromBody] RegisterProjectEventRequest request,

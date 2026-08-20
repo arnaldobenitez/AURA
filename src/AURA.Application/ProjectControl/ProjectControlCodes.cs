@@ -27,7 +27,21 @@ public static class ProjectControlCodes
         ProjectEventType.Handoff => "HANDOFF",
         ProjectEventType.Blocker => "BLOCKER",
         ProjectEventType.Completion => "COMPLETION",
+        ProjectEventType.Request => "REQUEST",
+        ProjectEventType.Approval => "APPROVAL",
+        ProjectEventType.Rework => "REWORK",
+        ProjectEventType.Deployment => "DEPLOYMENT",
         _ => throw new ArgumentOutOfRangeException(nameof(value), value, "Unknown ProjectEventType."),
+    };
+
+    public static string ToCode(ProjectAgent value) => value switch
+    {
+        ProjectAgent.Unassigned => "UNASSIGNED",
+        ProjectAgent.Codex => "CODEX",
+        ProjectAgent.ClaudeCode => "CLAUDE_CODE",
+        ProjectAgent.Grok => "GROK",
+        ProjectAgent.Devin => "DEVIN",
+        _ => throw new ArgumentOutOfRangeException(nameof(value), value, "Unknown ProjectAgent."),
     };
 
     public static string ToCode(ProjectActorType value) => value switch
@@ -56,6 +70,10 @@ public static class ProjectControlCodes
             case "HANDOFF": result = ProjectEventType.Handoff; return true;
             case "BLOCKER": result = ProjectEventType.Blocker; return true;
             case "COMPLETION": result = ProjectEventType.Completion; return true;
+            case "REQUEST": result = ProjectEventType.Request; return true;
+            case "APPROVAL": result = ProjectEventType.Approval; return true;
+            case "REWORK": result = ProjectEventType.Rework; return true;
+            case "DEPLOYMENT": result = ProjectEventType.Deployment; return true;
             default: result = default; return false;
         }
     }
@@ -79,6 +97,20 @@ public static class ProjectControlCodes
             case "IN_PROGRESS": result = ProjectWorkStatus.InProgress; return true;
             case "BLOCKED": result = ProjectWorkStatus.Blocked; return true;
             case "COMPLETED": result = ProjectWorkStatus.Completed; return true;
+            default: result = default; return false;
+        }
+    }
+
+    public static bool TryParseProjectStatus(string? value, out ProjectStatus result)
+    {
+        switch (Normalize(value))
+        {
+            case "DRAFT": result = ProjectStatus.Draft; return true;
+            case "ACTIVE": result = ProjectStatus.Active; return true;
+            case "PAUSED": result = ProjectStatus.Paused; return true;
+            case "BLOCKED": result = ProjectStatus.Blocked; return true;
+            case "COMPLETED": result = ProjectStatus.Completed; return true;
+            case "ARCHIVED": result = ProjectStatus.Archived; return true;
             default: result = default; return false;
         }
     }

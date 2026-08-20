@@ -2,7 +2,7 @@ import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useState } from "react";
 import { navItems } from "./navigation";
 
-export function Sidebar() {
+export function Sidebar({ onNavigate }: { onNavigate?: (path: string) => void }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   return (
@@ -34,10 +34,17 @@ export function Sidebar() {
           return (
             <li key={item.id}>
               <a
-                href="#"
+                href="/"
                 className={`app-sidebar__link${isActive ? " app-sidebar__link--active" : ""}`}
                 aria-current={isActive ? "page" : undefined}
                 title={isCollapsed ? item.label : undefined}
+                onClick={(event) => {
+                  if (!onNavigate) {
+                    return;
+                  }
+                  event.preventDefault();
+                  onNavigate("/");
+                }}
               >
                 <Icon className="app-sidebar__link-icon" size={16} aria-hidden="true" />
                 <span className="app-sidebar__link-label">{item.label}</span>
