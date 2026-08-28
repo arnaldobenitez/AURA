@@ -21,4 +21,11 @@ public sealed record RegisterProjectEventRequest(
     string? NextAction,
     string? Blocker,
     string? Reference,
-    string? Model);
+    string? Model,
+    // AURA_PROTOCOL v2.1: independent concurrency lane within the project (null = whole
+    // project, today's behavior). See docs/aura/AURA_PROTOCOL_v2.1.md.
+    string? WorkStream = null,
+    // Required for every mutating event except REQUEST/CLAIM, which establish the lease
+    // themselves. See docs/aura/AURA_PROTOCOL_v2.1.md "Lease and optimistic concurrency".
+    Guid? LeaseId = null,
+    long? ExpectedLeaseVersion = null);

@@ -9,7 +9,11 @@ namespace AURA.IntegrationTests.ProjectControl;
 /// Covers the EXEC/Etapa identity, approval/rework/completion rules, explicit control
 /// resolution, and legacy-environment handling introduced to replace the text-matched
 /// EXEC model. See rules/AURA.md history for the "Corrección integral del circuito" spec
-/// these scenarios were written against.
+/// these scenarios were written against. AURA_PROTOCOL v2.1 layers authentication and a
+/// per-(project, workStream) lease on top - every mutating event but CLAIM/REQUEST now needs
+/// the caller to present the lease it holds (see docs/aura/AURA_PROTOCOL_v2.1.md), so most
+/// sequences below open with an explicit CLAIM and thread PostedEvent.LeaseId/LeaseVersion
+/// forward exactly like the item-chain id was already threaded.
 /// </summary>
 [Collection(ProjectControlDatabaseCollection.Name)]
 public sealed class ProjectControlExecWorkflowTests(ProjectControlDatabaseFixture fixture)
@@ -28,27 +32,39 @@ public sealed class ProjectControlExecWorkflowTests(ProjectControlDatabaseFixtur
         return Assert.Single(board!.Projects, p => p.ProjectCode == projectCode);
     }
 
-    private async Task<long?> PostEventAsync(
-        string projectCode, Guid eventId, long? previousItemId, string summary,
+    private async Task<PostedEvent> PostEventAsync(
+        string projectCode, Guid eventId, PostedEvent? previous, string summary,
         string actorType = "HUMAN", int actorId = 1, string? model = null,
         string? nextControlType = null, int? nextControlId = null,
         string? stage = null, decimal? stageProgress = null, int? totalStages = null,
         string eventType = "PROGRESS", string? agent = null, string? environment = null, string? details = null)
     {
         var response = await PostEventRawAsync(
-            projectCode, eventId, previousItemId, summary, actorType, actorId, model,
-            nextControlType, nextControlId, stage, stageProgress, totalStages, eventType, agent, environment, details);
+            projectCode, eventId, previous?.ItemId, summary, actorType, actorId, model,
+            nextControlType, nextControlId, stage, stageProgress, totalStages, eventType, agent, environment, details,
+            previous?.LeaseId, previous?.LeaseVersion);
         response.EnsureSuccessStatusCode();
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        return body.GetProperty("itemId").GetInt64();
+        var itemId = body.GetProperty("itemId").GetInt64();
+
+        Guid? leaseId = null;
+        long? leaseVersion = null;
+        if (body.TryGetProperty("lease", out var lease) && lease.ValueKind != JsonValueKind.Null)
+        {
+            leaseId = lease.GetProperty("leaseId").GetGuid();
+            leaseVersion = lease.GetProperty("version").GetInt64();
+        }
+
+        return new PostedEvent(itemId, leaseId, leaseVersion);
     }
 
-    private Task<HttpResponseMessage> PostEventRawAsync(
+    private async Task<HttpResponseMessage> PostEventRawAsync(
         string projectCode, Guid eventId, long? expectedPreviousItemId, string summary,
         string actorType = "HUMAN", int actorId = 1, string? model = null,
         string? nextControlType = null, int? nextControlId = null,
         string? stage = null, decimal? stageProgress = null, int? totalStages = null,
-        string eventType = "PROGRESS", string? agent = null, string? environment = null, string? details = null)
+        string eventType = "PROGRESS", string? agent = null, string? environment = null, string? details = null,
+        Guid? leaseId = null, long? expectedLeaseVersion = null)
     {
         var request = new RegisterProjectEventRequest(
             ProjectControlDatabaseFixture.PrimaryTenantId,
@@ -69,9 +85,17 @@ public sealed class ProjectControlExecWorkflowTests(ProjectControlDatabaseFixtur
             null,
             null,
             null,
-            model);
+            model,
+            null,
+            leaseId,
+            expectedLeaseVersion);
 
-        return fixture.Client.PostAsJsonAsync("/api/project-control/events", request, JsonOptions);
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/project-control/events")
+        {
+            Content = JsonContent.Create(request, options: JsonOptions),
+        };
+        fixture.AddBearer(httpRequest, ProjectControlDatabaseFixture.PrimaryTenantId, actorType);
+        return await fixture.Client.SendAsync(httpRequest);
     }
 
     [SkippableFact]
@@ -84,7 +108,7 @@ public sealed class ProjectControlExecWorkflowTests(ProjectControlDatabaseFixtur
         await PostEventAsync(
             "CODEXANALYST", Guid.NewGuid(), null, "Analisis con Codex",
             actorType: "AI_ANALYST", actorId: 1, model: "GPT-5",
-            agent: "CODEX", environment: "ChatGPT Work");
+            agent: "CODEX", environment: "ChatGPT Work", eventType: "CLAIM");
 
         var project = await GetProjectAsync("CODEXANALYST");
         Assert.Equal("AI_ANALYST", project.LastActorType);
@@ -103,7 +127,7 @@ public sealed class ProjectControlExecWorkflowTests(ProjectControlDatabaseFixtur
         await PostEventAsync(
             "CLAUDECODER", Guid.NewGuid(), null, "Codificando con Claude Code",
             actorType: "CODER", actorId: 1, model: "Sonnet",
-            agent: "CLAUDE_CODE", environment: "VS Code");
+            agent: "CLAUDE_CODE", environment: "VS Code", eventType: "CLAIM");
 
         var project = await GetProjectAsync("CLAUDECODER");
         Assert.Equal("CODER", project.LastActorType);
@@ -122,7 +146,7 @@ public sealed class ProjectControlExecWorkflowTests(ProjectControlDatabaseFixtur
         await PostEventAsync(
             "CODEXCODER", Guid.NewGuid(), null, "Codificando directo con Codex CLI",
             actorType: "CODER", actorId: 1, model: "GPT-5.1-Codex",
-            agent: "CODEX", environment: "Codex CLI");
+            agent: "CODEX", environment: "Codex CLI", eventType: "CLAIM");
 
         var project = await GetProjectAsync("CODEXCODER");
         Assert.Equal("CODER", project.LastActorType);
@@ -224,13 +248,13 @@ public sealed class ProjectControlExecWorkflowTests(ProjectControlDatabaseFixtur
         await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "HANDOFFCTRL", "Handoff de control");
         await fixture.CreateUsuarioAsync(ProjectControlDatabaseFixture.PrimaryTenantId, 721, "Arnaldo Benitez");
 
-        var claimId = await PostEventAsync(
+        var claim = await PostEventAsync(
             "HANDOFFCTRL", Guid.NewGuid(), null, "Codex toma el control",
             actorType: "CODER", actorId: 1, model: "Sonnet", agent: "CLAUDE_CODE", environment: "VS Code",
             eventType: "CLAIM");
 
         await PostEventAsync(
-            "HANDOFFCTRL", Guid.NewGuid(), claimId, "Devuelve el control a Arnaldo",
+            "HANDOFFCTRL", Guid.NewGuid(), claim, "Devuelve el control a Arnaldo",
             actorType: "CODER", actorId: 1, model: "Sonnet", agent: "CLAUDE_CODE", environment: "VS Code",
             eventType: "HANDOFF", nextControlType: "HUMAN", nextControlId: 721);
 
@@ -250,14 +274,15 @@ public sealed class ProjectControlExecWorkflowTests(ProjectControlDatabaseFixtur
         await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "APPROVAL30", "Aprobacion al 30%");
         await fixture.CreateUsuarioAsync(ProjectControlDatabaseFixture.PrimaryTenantId, 730, "Arnaldo Benitez");
 
-        var progressId = await PostEventAsync(
+        var progress = await PostEventAsync(
             "APPROVAL30", Guid.NewGuid(), null, "Avance parcial de Etapa 1",
             actorType: "CODER", actorId: 1, model: "Sonnet", agent: "CLAUDE_CODE", environment: "VS Code",
-            stage: "Etapa 1", stageProgress: 30m, totalStages: 2);
+            eventType: "CLAIM", stage: "Etapa 1", stageProgress: 30m, totalStages: 2);
 
         var approvalResponse = await PostEventRawAsync(
-            "APPROVAL30", Guid.NewGuid(), progressId, "Intento de aprobar sin llegar al 100%",
-            actorType: "HUMAN", actorId: 730, eventType: "APPROVAL", stage: "Etapa 1");
+            "APPROVAL30", Guid.NewGuid(), progress.ItemId, "Intento de aprobar sin llegar al 100%",
+            actorType: "HUMAN", actorId: 730, eventType: "APPROVAL", stage: "Etapa 1",
+            leaseId: progress.LeaseId, expectedLeaseVersion: progress.LeaseVersion);
 
         Assert.Equal(HttpStatusCode.BadRequest, approvalResponse.StatusCode);
         var body = await approvalResponse.Content.ReadFromJsonAsync<JsonElement>();
@@ -277,13 +302,16 @@ public sealed class ProjectControlExecWorkflowTests(ProjectControlDatabaseFixtur
         await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "REWORKEXEC", "Rework reduce el EXEC");
         await fixture.CreateUsuarioAsync(ProjectControlDatabaseFixture.PrimaryTenantId, 740, "Arnaldo Benitez");
 
-        long? previous = null;
+        PostedEvent? previous = null;
+        var isFirstOverall = true;
         foreach (var (stageName, isFirst) in new[] { ("Etapa 1", true), ("Etapa 2", false) })
         {
             previous = await PostEventAsync(
                 "REWORKEXEC", Guid.NewGuid(), previous, $"Avance tecnico de {stageName}",
                 actorType: "CODER", actorId: 1, model: "Sonnet", agent: "CLAUDE_CODE", environment: "VS Code",
+                eventType: isFirstOverall ? "CLAIM" : "PROGRESS",
                 stage: stageName, stageProgress: 100m, totalStages: isFirst ? 2 : null);
+            isFirstOverall = false;
             previous = await PostEventAsync(
                 "REWORKEXEC", Guid.NewGuid(), previous, $"Aprobacion de {stageName}",
                 actorType: "HUMAN", actorId: 740, eventType: "APPROVAL", stage: stageName);
@@ -310,17 +338,18 @@ public sealed class ProjectControlExecWorkflowTests(ProjectControlDatabaseFixtur
         await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "COMPLETIONFAIL", "Completion sin todas aprobadas");
         await fixture.CreateUsuarioAsync(ProjectControlDatabaseFixture.PrimaryTenantId, 750, "Arnaldo Benitez");
 
-        var progressId = await PostEventAsync(
+        var progress = await PostEventAsync(
             "COMPLETIONFAIL", Guid.NewGuid(), null, "Avance de Etapa 1",
             actorType: "CODER", actorId: 1, model: "Sonnet", agent: "CLAUDE_CODE", environment: "VS Code",
-            stage: "Etapa 1", stageProgress: 100m, totalStages: 2);
-        var approvalId = await PostEventAsync(
-            "COMPLETIONFAIL", Guid.NewGuid(), progressId, "Aprobacion de Etapa 1",
+            eventType: "CLAIM", stage: "Etapa 1", stageProgress: 100m, totalStages: 2);
+        var approval = await PostEventAsync(
+            "COMPLETIONFAIL", Guid.NewGuid(), progress, "Aprobacion de Etapa 1",
             actorType: "HUMAN", actorId: 750, eventType: "APPROVAL", stage: "Etapa 1");
 
         var completionResponse = await PostEventRawAsync(
-            "COMPLETIONFAIL", Guid.NewGuid(), approvalId, "Intento de cerrar sin aprobar Etapa 2",
-            actorType: "HUMAN", actorId: 750, eventType: "COMPLETION");
+            "COMPLETIONFAIL", Guid.NewGuid(), approval.ItemId, "Intento de cerrar sin aprobar Etapa 2",
+            actorType: "HUMAN", actorId: 750, eventType: "COMPLETION",
+            leaseId: approval.LeaseId, expectedLeaseVersion: approval.LeaseVersion);
 
         Assert.Equal(HttpStatusCode.BadRequest, completionResponse.StatusCode);
         var body = await completionResponse.Content.ReadFromJsonAsync<JsonElement>();
@@ -335,13 +364,16 @@ public sealed class ProjectControlExecWorkflowTests(ProjectControlDatabaseFixtur
         await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "COMPLETIONOK", "Completion mantiene 100%");
         await fixture.CreateUsuarioAsync(ProjectControlDatabaseFixture.PrimaryTenantId, 760, "Arnaldo Benitez");
 
-        long? previous = null;
+        PostedEvent? previous = null;
+        var isFirstOverall = true;
         foreach (var (stageName, isFirst) in new[] { ("Etapa 1", true), ("Etapa 2", false) })
         {
             previous = await PostEventAsync(
                 "COMPLETIONOK", Guid.NewGuid(), previous, $"Avance tecnico de {stageName}",
                 actorType: "CODER", actorId: 1, model: "Sonnet", agent: "CLAUDE_CODE", environment: "VS Code",
+                eventType: isFirstOverall ? "CLAIM" : "PROGRESS",
                 stage: stageName, stageProgress: 100m, totalStages: isFirst ? 2 : null);
+            isFirstOverall = false;
             previous = await PostEventAsync(
                 "COMPLETIONOK", Guid.NewGuid(), previous, $"Aprobacion de {stageName}",
                 actorType: "HUMAN", actorId: 760, eventType: "APPROVAL", stage: stageName);
@@ -364,15 +396,15 @@ public sealed class ProjectControlExecWorkflowTests(ProjectControlDatabaseFixtur
         await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "TWOEXECS", "Dos EXEC consecutivos");
         await fixture.CreateUsuarioAsync(ProjectControlDatabaseFixture.PrimaryTenantId, 770, "Arnaldo Benitez");
 
-        var progressId = await PostEventAsync(
+        var progress = await PostEventAsync(
             "TWOEXECS", Guid.NewGuid(), null, "Avance de Etapa 1 del primer EXEC",
             actorType: "CODER", actorId: 1, model: "Sonnet", agent: "CLAUDE_CODE", environment: "VS Code",
-            stage: "Etapa 1", stageProgress: 100m, totalStages: 1);
-        var approvalId = await PostEventAsync(
-            "TWOEXECS", Guid.NewGuid(), progressId, "Aprobacion de Etapa 1 del primer EXEC",
+            eventType: "CLAIM", stage: "Etapa 1", stageProgress: 100m, totalStages: 1);
+        var approval = await PostEventAsync(
+            "TWOEXECS", Guid.NewGuid(), progress, "Aprobacion de Etapa 1 del primer EXEC",
             actorType: "HUMAN", actorId: 770, eventType: "APPROVAL", stage: "Etapa 1");
-        var completionId = await PostEventAsync(
-            "TWOEXECS", Guid.NewGuid(), approvalId, "Se cierra el primer EXEC",
+        var completion = await PostEventAsync(
+            "TWOEXECS", Guid.NewGuid(), approval, "Se cierra el primer EXEC",
             actorType: "HUMAN", actorId: 770, eventType: "COMPLETION");
 
         var afterFirstExec = await GetProjectAsync("TWOEXECS");
@@ -381,7 +413,7 @@ public sealed class ProjectControlExecWorkflowTests(ProjectControlDatabaseFixtur
 
         // Nuevo REQUEST: abre un EXEC nuevo, aunque reutilice el mismo nombre de etapa.
         await PostEventAsync(
-            "TWOEXECS", Guid.NewGuid(), completionId, "Nuevo pedido de trabajo",
+            "TWOEXECS", Guid.NewGuid(), completion, "Nuevo pedido de trabajo",
             actorType: "HUMAN", actorId: 770, eventType: "REQUEST",
             details: "Segunda ronda de trabajo", stage: "Etapa 1", stageProgress: 40m, totalStages: 3);
 
@@ -401,13 +433,13 @@ public sealed class ProjectControlExecWorkflowTests(ProjectControlDatabaseFixtur
         await fixture.ResetTestDataAsync();
         await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "EXECDESC", "Descripcion de EXEC heredada");
 
-        var firstId = await PostEventAsync(
+        var first = await PostEventAsync(
             "EXECDESC", Guid.NewGuid(), null, "Arranca el EXEC",
             actorType: "HUMAN", actorId: 1, eventType: "REQUEST",
             details: "Migrar el modulo de facturacion a la nueva API");
 
         await PostEventAsync(
-            "EXECDESC", Guid.NewGuid(), firstId, "Claude Code toma el control",
+            "EXECDESC", Guid.NewGuid(), first, "Claude Code toma el control",
             actorType: "CODER", actorId: 1, model: "Sonnet", agent: "CLAUDE_CODE", environment: "VS Code",
             eventType: "CLAIM");
 
@@ -423,13 +455,14 @@ public sealed class ProjectControlExecWorkflowTests(ProjectControlDatabaseFixtur
         await fixture.CreateProjectAsync(ProjectControlDatabaseFixture.PrimaryTenantId, "HALFEXEC", "Mitad de etapas");
         await fixture.CreateUsuarioAsync(ProjectControlDatabaseFixture.PrimaryTenantId, 780, "Arnaldo Benitez");
 
-        long? previous = null;
+        PostedEvent? previous = null;
         for (var i = 1; i <= 5; i++)
         {
             var stageName = $"Etapa {i}";
             previous = await PostEventAsync(
                 "HALFEXEC", Guid.NewGuid(), previous, $"Avance de {stageName}",
                 actorType: "CODER", actorId: 1, model: "Sonnet", agent: "CLAUDE_CODE", environment: "VS Code",
+                eventType: i == 1 ? "CLAIM" : "PROGRESS",
                 stage: stageName, stageProgress: 100m, totalStages: i == 1 ? 10 : null);
             previous = await PostEventAsync(
                 "HALFEXEC", Guid.NewGuid(), previous, $"Aprobacion de {stageName}",

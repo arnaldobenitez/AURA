@@ -1,8 +1,9 @@
+using AURA.Application.AgentCredential;
 using AURA.Domain.ProjectControl;
 
 namespace AURA.Application.ProjectControl;
 
-public sealed class ProjectControlService(IProjectControlRepository repository)
+public sealed class ProjectControlService(IProjectControlRepository repository, AgentLeaseOptions leaseOptions)
 {
     private const int SummaryMaxLength = 300;
     private const int LongTextMaxLength = 1000;
@@ -26,6 +27,7 @@ public sealed class ProjectControlService(IProjectControlRepository repository)
 
     public async Task<RegisterProjectEventResult> RegisterEventAsync(
         RegisterProjectEventRequest request,
+        AuthenticatedActor authenticatedActor,
         CancellationToken cancellationToken)
     {
         var errors = Validate(request, out var eventType, out var status, out var actorType, out var nextControlType);
@@ -33,6 +35,15 @@ public sealed class ProjectControlService(IProjectControlRepository repository)
         if (errors.Count > 0)
         {
             return new RegisterProjectEventResult(RegisterProjectEventStatus.ValidationFailed, null, null, errors);
+        }
+
+        // Identity is authenticated, not asserted: reject anything the caller's own credential
+        // does not back up, rather than trusting actor.type/actor.id from the body. See
+        // AURA_PROTOCOL v2.1 "HUMAN vs ANALYST" and "No confiar en AgentId enviado libremente".
+        var forbiddenReason = CheckAuthorization(request, actorType, authenticatedActor);
+        if (forbiddenReason is not null)
+        {
+            return new RegisterProjectEventResult(RegisterProjectEventStatus.Forbidden, null, null, [forbiddenReason]);
         }
 
         var command = new ProjectEventCommand(
@@ -56,20 +67,35 @@ public sealed class ProjectControlService(IProjectControlRepository repository)
             NullIfWhiteSpace(request.NextAction),
             NullIfWhiteSpace(request.Blocker),
             NullIfWhiteSpace(request.Reference),
-            NullIfWhiteSpace(request.Model));
+            NullIfWhiteSpace(request.Model),
+            NullIfWhiteSpace(request.WorkStream),
+            request.LeaseId,
+            request.ExpectedLeaseVersion,
+            authenticatedActor.CredentialId,
+            leaseOptions.Duration);
 
         var outcome = await repository.RegisterEventAsync(command, cancellationToken);
 
         return outcome.Status switch
         {
             ProjectEventOutcomeStatus.Created =>
-                new RegisterProjectEventResult(RegisterProjectEventStatus.Created, outcome.ItemId, null, null),
+                new RegisterProjectEventResult(RegisterProjectEventStatus.Created, outcome.ItemId, null, null, ToLeaseInfo(outcome.Lease)),
             ProjectEventOutcomeStatus.AlreadyExists =>
-                new RegisterProjectEventResult(RegisterProjectEventStatus.AlreadyExists, outcome.ItemId, null, null),
+                new RegisterProjectEventResult(RegisterProjectEventStatus.AlreadyExists, outcome.ItemId, null, null, ToLeaseInfo(outcome.Lease)),
             ProjectEventOutcomeStatus.ProjectNotFound =>
                 new RegisterProjectEventResult(RegisterProjectEventStatus.ProjectNotFound, null, null, null),
             ProjectEventOutcomeStatus.Conflict =>
                 new RegisterProjectEventResult(RegisterProjectEventStatus.Conflict, null, outcome.CurrentLastItemId, null),
+            ProjectEventOutcomeStatus.LeaseConflict =>
+                new RegisterProjectEventResult(
+                    RegisterProjectEventStatus.LeaseConflict, null, null,
+                    [outcome.ErrorMessage ?? "Otro actor ya tiene el control de este proyecto/workstream."],
+                    ToLeaseInfo(outcome.Lease)),
+            ProjectEventOutcomeStatus.LeaseExpired =>
+                new RegisterProjectEventResult(
+                    RegisterProjectEventStatus.LeaseConflict,
+                    null, null,
+                    [outcome.ErrorMessage ?? "El lease expiró; tomá el control nuevamente con CLAIM."]),
             ProjectEventOutcomeStatus.InvalidTransition =>
                 new RegisterProjectEventResult(
                     RegisterProjectEventStatus.ValidationFailed, null, null,
@@ -77,6 +103,40 @@ public sealed class ProjectControlService(IProjectControlRepository repository)
             _ => throw new InvalidOperationException($"Unhandled outcome status '{outcome.Status}'."),
         };
     }
+
+    /// <summary>
+    /// Returns a human-readable rejection reason, or null if the authenticated credential is
+    /// entitled to register this event as described. ActorType must match exactly (this is the
+    /// security-critical check: an AI credential can never claim to be HUMAN). ActorId is only
+    /// cross-checked when the credential itself pins one (today: required for HUMAN credentials,
+    /// optional for CODER/AI_ANALYST) - see docs/aura/AURA_PROTOCOL_v2.1.md.
+    /// </summary>
+    private static string? CheckAuthorization(
+        RegisterProjectEventRequest request, ProjectActorType actorType, AuthenticatedActor authenticatedActor)
+    {
+        if (request.TenantId != authenticatedActor.TenantId)
+        {
+            return "La credencial autenticada no pertenece a este tenantId.";
+        }
+
+        if (actorType != authenticatedActor.ActorType)
+        {
+            return $"La credencial autenticada es {authenticatedActor.ActorType}; no puede registrar un evento como actor.type '{ProjectControlCodes.ToCode(actorType)}'.";
+        }
+
+        if (authenticatedActor.LinkedActorId is { } linkedId && request.Actor.Id != linkedId)
+        {
+            return "actor.id no coincide con la identidad vinculada a la credencial autenticada.";
+        }
+
+        return null;
+    }
+
+    private static LeaseInfoDto? ToLeaseInfo(LeaseSnapshot? lease) => lease is null
+        ? null
+        : new LeaseInfoDto(
+            lease.LeaseId, lease.Version, lease.ExpiresAtUtc,
+            ProjectControlCodes.ToCode(lease.HolderActorType), lease.HolderActorId);
 
     private static List<string> Validate(
         RegisterProjectEventRequest request,
@@ -183,6 +243,26 @@ public sealed class ProjectControlService(IProjectControlRepository repository)
             if (string.IsNullOrWhiteSpace(request.Environment))
             {
                 errors.Add("environment es obligatorio para intervenciones no humanas.");
+            }
+        }
+
+        if (request.WorkStream is { } workStream && workStream.Trim().Length > StageMaxLength)
+        {
+            errors.Add($"workStream no puede superar {StageMaxLength} caracteres.");
+        }
+
+        // The lease governs exclusive WORK (CLAIM/PROGRESS/HANDOFF/BLOCKER/DEPLOYMENT): every one
+        // of those but CLAIM (which acquires it) must present the lease it holds. REQUEST,
+        // APPROVAL, REWORK and COMPLETION are HUMAN governance actions layered on top of that
+        // lease, not part of it - a human doesn't need to hold the coder's work lease to
+        // exercise approval/rework/completion authority. See docs/aura/AURA_PROTOCOL_v2.1.md
+        // "Lease y concurrencia optimista".
+        if (eventType is ProjectEventType.Progress or ProjectEventType.Handoff
+            or ProjectEventType.Blocker or ProjectEventType.Deployment)
+        {
+            if (request.LeaseId is null || request.ExpectedLeaseVersion is null)
+            {
+                errors.Add("leaseId y expectedLeaseVersion son obligatorios para este tipo de evento (tomá el control con CLAIM primero).");
             }
         }
 

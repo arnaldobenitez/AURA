@@ -15,7 +15,7 @@ public sealed class CreateProjectEndpointTests(ProjectControlDatabaseFixture fix
         Skip.IfNot(fixture.IsAvailable, "Requiere conectividad con el SQL Server de desarrollo (AURA_DESIGNTIME_CONNSTR o User Secrets de AURA.Api).");
     }
 
-    private Task<HttpResponseMessage> PostCreateProjectRawAsync(
+    private async Task<HttpResponseMessage> PostCreateProjectRawAsync(
         int tenantId,
         string code,
         string name,
@@ -26,7 +26,12 @@ public sealed class CreateProjectEndpointTests(ProjectControlDatabaseFixture fix
         int? humanResponsibleId = null)
     {
         var request = new CreateProjectRequest(tenantId, code, name, description, workingPath, repository, status, humanResponsibleId);
-        return fixture.Client.PostAsJsonAsync("/api/project-control/projects", request, JsonOptions);
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/project-control/projects")
+        {
+            Content = JsonContent.Create(request, options: JsonOptions),
+        };
+        fixture.AddBearer(httpRequest, tenantId, "CODER");
+        return await fixture.Client.SendAsync(httpRequest);
     }
 
     [SkippableFact]

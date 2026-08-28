@@ -173,7 +173,9 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
             await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
             var sqlTransaction = (SqlTransaction)transaction.GetDbTransaction();
 
-            var lockedState = await GetLockedLastItemStateAsync(connection, sqlTransaction, command.TenantId, projectId.Value, cancellationToken);
+            // Numeracion global de IdItems (unica por proyecto, no por workstream - evita
+            // colisiones entre workstreams concurrentes que insertan en la misma transaccion).
+            var globalLastItemId = await GetGlobalLastItemIdAsync(connection, sqlTransaction, command.TenantId, projectId.Value, cancellationToken);
 
             var existingItemId = await FindItemIdByEventAsync(connection, sqlTransaction, command.TenantId, projectId.Value, command.EventId, cancellationToken);
             if (existingItemId is not null)
@@ -182,21 +184,38 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
                 return new ProjectEventOutcome(ProjectEventOutcomeStatus.AlreadyExists, existingItemId, null);
             }
 
-            if (lockedState.ItemId != command.ExpectedPreviousItemId)
+            // Estado de la cadena PARA ESTE WORKSTREAM (null = todo el proyecto, comportamiento
+            // identico al de antes de AURA_PROTOCOL v2.1 para cualquier fila existente, que
+            // siempre tiene sWorkStream NULL). Workstreams distintos tienen cadenas, EXEC,
+            // etapa, control y lease independientes - ver docs/aura/AURA_PROTOCOL_v2.1.md.
+            var chainState = await GetChainStateAsync(connection, sqlTransaction, command.TenantId, projectId.Value, command.WorkStream, cancellationToken);
+
+            if (chainState.ItemId != command.ExpectedPreviousItemId)
             {
                 await transaction.RollbackAsync(cancellationToken);
-                return new ProjectEventOutcome(ProjectEventOutcomeStatus.Conflict, null, lockedState.ItemId);
+                return new ProjectEventOutcome(ProjectEventOutcomeStatus.Conflict, null, chainState.ItemId);
             }
 
-            var nextItemId = (lockedState.ItemId ?? 0) + 1;
+            var nextItemId = globalLastItemId + 1;
 
-            // 1) EXEC vigente: se crea uno nuevo si no hay ninguno o el ultimo esta Completado.
+            // 0) Lease: CLAIM/REQUEST lo adquieren o renuevan; todo otro evento mutante debe
+            //    presentar el que ya tiene, vigente y con la version esperada. Ver
+            //    docs/aura/AURA_PROTOCOL_v2.1.md "Lease y concurrencia optimista".
+            var leaseResult = ResolveLease(command, chainState);
+            if (leaseResult.Rejection is { } rejection)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return new ProjectEventOutcome(rejection.Status, null, null, rejection.Message, rejection.CurrentLease);
+            }
+
+            // 1) EXEC vigente (para este workstream): se crea uno nuevo si no hay ninguno o el
+            //    ultimo esta Completado.
             var exec = await ResolveOrCreateExecAsync(
-                connection, sqlTransaction, command.TenantId, projectId.Value, command.Details, command.TotalStages, cancellationToken);
+                connection, sqlTransaction, command.TenantId, projectId.Value, command.WorkStream, command.Details, command.TotalStages, cancellationToken);
 
             // 2) Etapa: por descripcion (dentro del EXEC vigente) o heredada del evento anterior
             //    (solo si ese evento anterior pertenecia al MISMO EXEC).
-            var inheritedStageId = lockedState.ExecId == exec.ExecId ? lockedState.StageId : null;
+            var inheritedStageId = chainState.ExecId == exec.ExecId ? chainState.StageId : null;
             var stage = await ResolveOrCreateStageAsync(
                 connection, sqlTransaction, command.TenantId, projectId.Value, exec.ExecId, command.Stage, inheritedStageId, cancellationToken);
 
@@ -229,7 +248,7 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
             }
 
             // 5) Control actual, resuelto y grabado explicitamente (no inferido despues en el GET).
-            var (controlType, controlId, controlItemId) = ResolveControl(command, nextItemId, lockedState);
+            var (controlType, controlId, controlItemId) = ResolveControl(command, nextItemId, chainState);
 
             var effectiveCommand = command with
             {
@@ -239,10 +258,10 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
 
             await InsertEventAsync(
                 connection, sqlTransaction, effectiveCommand, projectId.Value, nextItemId,
-                exec, stage, execProgress, controlItemId, cancellationToken);
+                exec, stage, execProgress, controlItemId, leaseResult.NewLease, cancellationToken);
 
             await transaction.CommitAsync(cancellationToken);
-            return new ProjectEventOutcome(ProjectEventOutcomeStatus.Created, nextItemId, null);
+            return new ProjectEventOutcome(ProjectEventOutcomeStatus.Created, nextItemId, null, null, leaseResult.NewLease);
         }
         finally
         {
@@ -535,34 +554,229 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
         return result is int id ? id : null;
     }
 
-    private sealed record LockedItemState(long? ItemId, int? ExecId, int? StageId, long? ControlItemId);
+    /// <summary>
+    /// Estado de la cadena de eventos para UN workstream (null incluido - "todo el proyecto").
+    /// Cada workstream tiene su propia continuidad de EXEC/etapa/control/lease, independiente
+    /// de cualquier otro workstream del mismo proyecto. Ver AURA_PROTOCOL v2.1.
+    /// </summary>
+    private sealed record ChainState(
+        long? ItemId, int? ExecId, int? StageId, long? ControlItemId,
+        Guid? LeaseId, long? LeaseVersion, DateTime? LeaseExpiresAtUtc,
+        // Declared identity (type/id) of whoever should hold the lease - always populated
+        // whenever there's an active lease. HolderCredentialId is the authenticated identity
+        // once known: set immediately by CLAIM (the claimant is already authenticated), left
+        // null right after a HANDOFF until the declared next actor shows up and acts (see
+        // ResolveLease). Matching by credential is what actually distinguishes two different
+        // CODER/AI_ANALYST/HUMAN credentials that happen to share the same declared type/id.
+        ProjectActorType? HolderActorType, int? HolderActorId, int? HolderCredentialId);
 
-    private static async Task<LockedItemState> GetLockedLastItemStateAsync(
+    /// <summary>
+    /// MAX(IdItems) global del proyecto (todas las filas, cualquier workstream) bajo
+    /// UPDLOCK/HOLDLOCK - sigue siendo la unica fuente de numeracion de IdItems para evitar
+    /// colisiones cuando dos workstreams escriben "al mismo tiempo". Este lock serializa
+    /// brevemente la asignacion de numero entre workstreams del mismo proyecto (no el resto de
+    /// la transaccion); ver docs/aura/AURA_PROTOCOL_v2.1.md, seccion de concurrencia.
+    /// </summary>
+    private static async Task<long> GetGlobalLastItemIdAsync(
         SqlConnection connection, SqlTransaction transaction, int tenantId, int projectId, CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText =
             """
-            SELECT TOP (1) IdItems, IdEXEC, IdEtapa, IdControlItem
+            SELECT ISNULL(MAX(IdItems), 0)
             FROM dbo.ProProyectosItems WITH (UPDLOCK, HOLDLOCK)
-            WHERE idTenant = @tenantId AND IdProyecto = @projectId
-            ORDER BY IdItems DESC;
+            WHERE idTenant = @tenantId AND IdProyecto = @projectId;
             """;
         command.Parameters.AddWithValue("@tenantId", tenantId);
         command.Parameters.AddWithValue("@projectId", projectId);
 
+        var result = await command.ExecuteScalarAsync(cancellationToken);
+        return Convert.ToInt64(result);
+    }
+
+    private static async Task<ChainState> GetChainStateAsync(
+        SqlConnection connection, SqlTransaction transaction, int tenantId, int projectId, string? workStream, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            SELECT TOP (1)
+                li.IdItems, li.IdEXEC, li.IdEtapa, li.IdControlItem,
+                li.LeaseId, li.LeaseVersion, li.LeaseExpiresAtUtc,
+                li.nControlTipo, li.nControlId,
+                controlItem.nActorTipo AS ControlItemActorTipo,
+                controlItem.nCodificador AS ControlItemCoder,
+                controlItem.nAnalista AS ControlItemAnalyst,
+                controlItem.nHumano AS ControlItemHuman,
+                controlItem.IdCredential AS ControlItemCredential
+            FROM dbo.ProProyectosItems li WITH (UPDLOCK, HOLDLOCK)
+            LEFT JOIN dbo.ProProyectosItems controlItem
+                ON controlItem.idTenant = li.idTenant AND controlItem.IdProyecto = li.IdProyecto AND controlItem.IdItems = li.IdControlItem
+            WHERE li.idTenant = @tenantId AND li.IdProyecto = @projectId
+                AND (li.sWorkStream = @workStream OR (li.sWorkStream IS NULL AND @workStream IS NULL))
+            ORDER BY li.IdItems DESC;
+            """;
+        command.Parameters.AddWithValue("@tenantId", tenantId);
+        command.Parameters.AddWithValue("@projectId", projectId);
+        command.Parameters.Add("@workStream", SqlDbType.NVarChar).Value = (object?)workStream ?? DBNull.Value;
+
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
         {
-            return new LockedItemState(null, null, null, null);
+            return new ChainState(null, null, null, null, null, null, null, null, null, null);
         }
 
-        return new LockedItemState(
+        var leaseId = reader.IsDBNull(4) ? (Guid?)null : reader.GetGuid(4);
+        var leaseVersion = reader.IsDBNull(5) ? (long?)null : reader.GetInt64(5);
+        var leaseExpiresAtUtc = reader.IsDBNull(6) ? (DateTime?)null : reader.GetDateTime(6);
+
+        ProjectActorType? holderType = null;
+        int? holderId = null;
+        int? holderCredentialId = null;
+
+        // Prioridad identica a MapProjectRow: 1) fila resuelta via IdControlItem (cubre CLAIM,
+        // que se auto-referencia, y trae su propio IdCredential -> identidad autenticada
+        // conocida); 2) nControlTipo/nControlId explicito de un HANDOFF reciente, todavia sin
+        // que el nuevo control se haya autenticado (HolderCredentialId queda null a proposito).
+        var controlItemActorRaw = reader.IsDBNull(9) ? (byte?)null : reader.GetByte(9);
+        if (controlItemActorRaw is { } actorByte && Enum.IsDefined(typeof(ProjectActorType), (int)actorByte))
+        {
+            holderType = (ProjectActorType)actorByte;
+            holderId = holderType switch
+            {
+                ProjectActorType.Coder => reader.IsDBNull(10) ? null : reader.GetInt32(10),
+                ProjectActorType.AiAnalyst => reader.IsDBNull(11) ? null : reader.GetInt32(11),
+                ProjectActorType.Human => reader.IsDBNull(12) ? null : reader.GetInt32(12),
+                _ => null,
+            };
+            holderCredentialId = reader.IsDBNull(13) ? null : reader.GetInt32(13);
+        }
+        else
+        {
+            var controlTipoRaw = reader.IsDBNull(7) ? (byte?)null : reader.GetByte(7);
+            if (controlTipoRaw is { } controlByte && Enum.IsDefined(typeof(ProjectActorType), (int)controlByte))
+            {
+                holderType = (ProjectActorType)controlByte;
+                holderId = reader.IsDBNull(8) ? null : reader.GetInt32(8);
+            }
+        }
+
+        return new ChainState(
             reader.IsDBNull(0) ? null : reader.GetInt64(0),
             reader.IsDBNull(1) ? null : reader.GetInt32(1),
             reader.IsDBNull(2) ? null : reader.GetInt32(2),
-            reader.IsDBNull(3) ? null : reader.GetInt64(3));
+            reader.IsDBNull(3) ? null : reader.GetInt64(3),
+            leaseId, leaseVersion, leaseExpiresAtUtc, holderType, holderId, holderCredentialId);
+    }
+
+    private sealed record LeaseRejection(ProjectEventOutcomeStatus Status, string Message, LeaseSnapshot? CurrentLease);
+
+    private sealed record LeaseResolution(LeaseSnapshot? NewLease, LeaseRejection? Rejection);
+
+    /// <summary>
+    /// El lease gobierna trabajo exclusivo: CLAIM lo adquiere/renueva (rechaza solo si otro
+    /// actor autenticado - por credencial, no por actor.type/id de texto libre - ya lo tiene
+    /// vigente); PROGRESS/HANDOFF/BLOCKER/DEPLOYMENT deben presentar el lease vigente exacto
+    /// (id + version) y ser su tenedor, y lo renuevan (version+1, vencimiento extendido) salvo
+    /// HANDOFF, que lo reasigna de forma atomica al nuevo control declarado. REQUEST/APPROVAL/
+    /// REWORK son gobierno humano por fuera del lease (lo preservan sin exigirlo); COMPLETION lo
+    /// libera. Ver docs/aura/AURA_PROTOCOL_v2.1.md.
+    /// </summary>
+    private static LeaseResolution ResolveLease(ProjectEventCommand command, ChainState chainState)
+    {
+        var now = DateTime.UtcNow;
+        var hasActiveLease = chainState.LeaseId is not null && chainState.LeaseExpiresAtUtc > now;
+        var currentSnapshot = hasActiveLease
+            ? new LeaseSnapshot(chainState.LeaseId!.Value, chainState.LeaseVersion!.Value, chainState.LeaseExpiresAtUtc!.Value, chainState.HolderActorType ?? ProjectActorType.Unassigned, chainState.HolderActorId, chainState.HolderCredentialId)
+            : null;
+
+        // El tenedor real es la credencial autenticada, no el actor.type/id declarado (texto
+        // libre en su mayoria). Si todavia no se conoce (justo despues de un HANDOFF), se acepta
+        // a quien coincida con el tipo/id declarado y, al aceptarlo, se fija su credencial para
+        // adelante - ver ChainState y docs/aura/AURA_PROTOCOL_v2.1.md.
+        bool HolderMatches() => chainState.HolderCredentialId is { } knownCredentialId
+            ? knownCredentialId == command.CredentialId
+            : chainState.HolderActorType == command.ActorType
+                && (chainState.HolderActorId is null || chainState.HolderActorId == command.ActorId);
+
+        if (command.EventType is ProjectEventType.Request or ProjectEventType.Approval or ProjectEventType.Rework)
+        {
+            // Acciones de gobierno humano (Solicitud/Aprobación/Retrabajo): no forman parte del
+            // lease de trabajo exclusivo, no lo exigen. Se preserva tal cual (si hay uno activo)
+            // para que la fila mas reciente de la cadena no "borre" el lease vigente del
+            // codificador que sigue trabajando - ver docs/aura/AURA_PROTOCOL_v2.1.md.
+            return new LeaseResolution(currentSnapshot, null);
+        }
+
+        if (command.EventType == ProjectEventType.Completion)
+        {
+            // Finalización: se libera intencionalmente (a diferencia de REQUEST/APPROVAL/REWORK)
+            // para que un CLAIM posterior no tenga que esperar el vencimiento natural.
+            return new LeaseResolution(null, null);
+        }
+
+        if (command.EventType == ProjectEventType.Claim)
+        {
+            if (hasActiveLease && !HolderMatches())
+            {
+                return new LeaseResolution(null, new LeaseRejection(
+                    ProjectEventOutcomeStatus.LeaseConflict,
+                    "Otro actor ya tiene el control (lease vigente) de este proyecto/workstream.",
+                    currentSnapshot));
+            }
+
+            var duration = command.LeaseDuration ?? TimeSpan.FromMinutes(30);
+            return new LeaseResolution(
+                new LeaseSnapshot(Guid.NewGuid(), 1, now.Add(duration), command.ActorType, command.ActorId, command.CredentialId),
+                null);
+        }
+
+        // PROGRESS, HANDOFF, BLOCKER, DEPLOYMENT: deben presentar el lease vigente exacto y ser
+        // quien lo tiene (REQUEST/APPROVAL/REWORK/COMPLETION ya retornaron arriba).
+        if (!hasActiveLease)
+        {
+            return new LeaseResolution(null, new LeaseRejection(
+                ProjectEventOutcomeStatus.LeaseExpired,
+                "No hay un lease vigente para este proyecto/workstream; tomá el control con CLAIM.",
+                null));
+        }
+
+        if (chainState.LeaseId != command.LeaseId || chainState.LeaseVersion != command.ExpectedLeaseVersion)
+        {
+            return new LeaseResolution(null, new LeaseRejection(
+                ProjectEventOutcomeStatus.LeaseConflict,
+                "El leaseId/expectedLeaseVersion no coincide con el lease vigente.",
+                currentSnapshot));
+        }
+
+        if (!HolderMatches())
+        {
+            return new LeaseResolution(null, new LeaseRejection(
+                ProjectEventOutcomeStatus.LeaseConflict,
+                "El actor autenticado no es quien tiene el control (lease) actual.",
+                currentSnapshot));
+        }
+
+        if (command.EventType == ProjectEventType.Handoff && command.NextControlType is not null)
+        {
+            var duration = command.LeaseDuration ?? TimeSpan.FromMinutes(30);
+            // HolderCredentialId queda null a proposito: el proximo control todavia no se
+            // autentico bajo este lease. Se fija en su primera escritura aceptada (mas abajo).
+            return new LeaseResolution(
+                new LeaseSnapshot(Guid.NewGuid(), 1, now.Add(duration), command.NextControlType.Value, command.NextControlId, null),
+                null);
+        }
+
+        // Renovacion simple (heartbeat implicito en cualquier escritura aceptada): misma
+        // identidad declarada, version+1, vencimiento extendido, credencial confirmada/fijada.
+        var renewedDuration = command.LeaseDuration ?? TimeSpan.FromMinutes(30);
+        return new LeaseResolution(
+            new LeaseSnapshot(
+                chainState.LeaseId!.Value, chainState.LeaseVersion!.Value + 1, now.Add(renewedDuration),
+                chainState.HolderActorType!.Value, chainState.HolderActorId, command.CredentialId),
+            null);
     }
 
     private static async Task<long?> FindItemIdByEventAsync(
@@ -585,15 +799,20 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
     private sealed record ExecRow(int ExecId, string? Description, ProjectExecStatus Status, int? TotalStages);
 
     private static async Task<ExecRow?> GetLatestExecAsync(
-        SqlConnection connection, SqlTransaction transaction, int tenantId, int projectId, CancellationToken cancellationToken)
+        SqlConnection connection, SqlTransaction transaction, int tenantId, int projectId, string? workStream, CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText =
-            "SELECT TOP (1) IdEXEC, sDescripcion, nEstado, nTotalEtapas FROM dbo.ProProyectoEXEC " +
-            "WHERE idTenant = @tenantId AND IdProyecto = @projectId ORDER BY IdEXEC DESC;";
+            """
+            SELECT TOP (1) IdEXEC, sDescripcion, nEstado, nTotalEtapas FROM dbo.ProProyectoEXEC
+            WHERE idTenant = @tenantId AND IdProyecto = @projectId
+                AND (sWorkStream = @workStream OR (sWorkStream IS NULL AND @workStream IS NULL))
+            ORDER BY IdEXEC DESC;
+            """;
         command.Parameters.AddWithValue("@tenantId", tenantId);
         command.Parameters.AddWithValue("@projectId", projectId);
+        command.Parameters.Add("@workStream", SqlDbType.NVarChar).Value = (object?)workStream ?? DBNull.Value;
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
@@ -608,24 +827,41 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
             reader.IsDBNull(3) ? null : reader.GetInt32(3));
     }
 
+    /// <summary>
+    /// Numeracion global de IdEXEC (unica por proyecto, no por workstream - misma razon que
+    /// GetGlobalLastItemIdAsync: evitar colisiones de PK entre workstreams concurrentes).
+    /// </summary>
+    private static async Task<int> GetNextExecIdAsync(
+        SqlConnection connection, SqlTransaction transaction, int tenantId, int projectId, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT ISNULL(MAX(IdEXEC), 0) FROM dbo.ProProyectoEXEC WHERE idTenant = @tenantId AND IdProyecto = @projectId;";
+        command.Parameters.AddWithValue("@tenantId", tenantId);
+        command.Parameters.AddWithValue("@projectId", projectId);
+
+        var result = await command.ExecuteScalarAsync(cancellationToken);
+        return Convert.ToInt32(result) + 1;
+    }
+
     private static async Task<ExecRow> ResolveOrCreateExecAsync(
-        SqlConnection connection, SqlTransaction transaction, int tenantId, int projectId,
+        SqlConnection connection, SqlTransaction transaction, int tenantId, int projectId, string? workStream,
         string? requestedDescription, int? requestedTotalStages, CancellationToken cancellationToken)
     {
-        var current = await GetLatestExecAsync(connection, transaction, tenantId, projectId, cancellationToken);
+        var current = await GetLatestExecAsync(connection, transaction, tenantId, projectId, workStream, cancellationToken);
 
         if (current is null || current.Status == ProjectExecStatus.Completed)
         {
             // EXEC nuevo: sin mezclar etapas/aprobaciones del anterior, arranca en 0.
-            var newExecId = (current?.ExecId ?? 0) + 1;
+            var newExecId = await GetNextExecIdAsync(connection, transaction, tenantId, projectId, cancellationToken);
             var humanResponsibleId = await GetProjectHumanResponsibleIdAsync(connection, transaction, tenantId, projectId, cancellationToken);
 
             await using var insert = connection.CreateCommand();
             insert.Transaction = transaction;
             insert.CommandText =
                 """
-                INSERT INTO dbo.ProProyectoEXEC (idTenant, IdProyecto, IdEXEC, sDescripcion, nEstado, nTotalEtapas, nHumanoResponsable, dFechaInicio, dFechaFin)
-                VALUES (@tenantId, @projectId, @execId, @description, @status, @totalStages, @humanResponsibleId, @now, NULL);
+                INSERT INTO dbo.ProProyectoEXEC (idTenant, IdProyecto, IdEXEC, sDescripcion, nEstado, nTotalEtapas, nHumanoResponsable, dFechaInicio, dFechaFin, sWorkStream)
+                VALUES (@tenantId, @projectId, @execId, @description, @status, @totalStages, @humanResponsibleId, @now, NULL, @workStream);
                 """;
             insert.Parameters.AddWithValue("@tenantId", tenantId);
             insert.Parameters.AddWithValue("@projectId", projectId);
@@ -635,6 +871,7 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
             insert.Parameters.Add("@totalStages", SqlDbType.Int).Value = (object?)requestedTotalStages ?? DBNull.Value;
             insert.Parameters.Add("@humanResponsibleId", SqlDbType.Int).Value = (object?)humanResponsibleId ?? DBNull.Value;
             insert.Parameters.AddWithValue("@now", DateTime.UtcNow);
+            insert.Parameters.Add("@workStream", SqlDbType.NVarChar).Value = (object?)workStream ?? DBNull.Value;
             await insert.ExecuteNonQueryAsync(cancellationToken);
 
             return new ExecRow(newExecId, requestedDescription, ProjectExecStatus.Active, requestedTotalStages);
@@ -909,7 +1146,7 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
     /// pasa ninguna de las dos cosas, se hereda el control del evento anterior.
     /// </summary>
     private static (ProjectActorType? ControlType, int? ControlId, long? ControlItemId) ResolveControl(
-        ProjectEventCommand command, long newItemId, LockedItemState lockedState)
+        ProjectEventCommand command, long newItemId, ChainState chainState)
     {
         if (command.EventType == ProjectEventType.Claim)
         {
@@ -921,7 +1158,7 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
             return (command.NextControlType, command.NextControlId, null);
         }
 
-        return (null, null, lockedState.ControlItemId);
+        return (null, null, chainState.ControlItemId);
     }
 
     private static async Task InsertEventAsync(
@@ -934,6 +1171,7 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
         StageRow? stage,
         decimal? execProgress,
         long? controlItemId,
+        LeaseSnapshot? newLease,
         CancellationToken cancellationToken)
     {
         int? coder = null;
@@ -963,11 +1201,13 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
             INSERT INTO dbo.ProProyectosItems
                 (idTenant, IdProyecto, IdItems, dFechaEntrada, nCodificador, nAnalista, nHumano, sDescripcion, OrdenInput,
                  IdEvento, IdItemAnterior, nTipoEvento, nActorTipo, sAgente, sEntorno, nEstadoTrabajo, nControlTipo, nControlId, IdControlItem,
-                 sResumen, sProximaAccion, sBloqueo, sReferencia, sModelo, IdEXEC, IdEtapa, sEtapa, nPorcEtapa, nTotalEtapas, nPorcEXEC)
+                 sResumen, sProximaAccion, sBloqueo, sReferencia, sModelo, IdEXEC, IdEtapa, sEtapa, nPorcEtapa, nTotalEtapas, nPorcEXEC,
+                 sWorkStream, LeaseId, LeaseVersion, LeaseExpiresAtUtc, IdCredential)
             VALUES
                 (@tenantId, @projectId, @itemId, @now, @coder, @analyst, @human, @details, NULL,
                  @eventId, @previousItemId, @eventType, @actorType, @agent, @environment, @status, @controlType, @controlId, @controlItemId,
-                 @summary, @nextAction, @blocker, @reference, @model, @execId, @stageId, @stageDescription, @stageProgress, @totalStages, @execProgress);
+                 @summary, @nextAction, @blocker, @reference, @model, @execId, @stageId, @stageDescription, @stageProgress, @totalStages, @execProgress,
+                 @workStream, @leaseId, @leaseVersion, @leaseExpiresAtUtc, @credentialId);
             """;
 
         var parameters = insertCommand.Parameters;
@@ -1010,6 +1250,12 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
         execProgressParam.Precision = 18;
         execProgressParam.Scale = 2;
         execProgressParam.Value = (object?)execProgress ?? DBNull.Value;
+
+        parameters.Add("@workStream", SqlDbType.NVarChar).Value = (object?)command.WorkStream ?? DBNull.Value;
+        parameters.Add("@leaseId", SqlDbType.UniqueIdentifier).Value = (object?)newLease?.LeaseId ?? DBNull.Value;
+        parameters.Add("@leaseVersion", SqlDbType.BigInt).Value = (object?)newLease?.Version ?? DBNull.Value;
+        parameters.Add("@leaseExpiresAtUtc", SqlDbType.DateTime2).Value = (object?)newLease?.ExpiresAtUtc ?? DBNull.Value;
+        parameters.Add("@credentialId", SqlDbType.Int).Value = (object?)command.CredentialId ?? DBNull.Value;
 
         await insertCommand.ExecuteNonQueryAsync(cancellationToken);
     }

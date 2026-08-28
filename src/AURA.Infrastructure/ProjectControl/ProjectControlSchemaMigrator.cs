@@ -40,6 +40,7 @@ public sealed class ProjectControlSchemaMigrator(
 
             await ApplySchemaAsync(connection, sqlTransaction, cancellationToken);
             await SeedProjectsAsync(connection, sqlTransaction, cancellationToken);
+            await SeedDefaultHumanLoginAsync(connection, sqlTransaction, cancellationToken);
 
             await transaction.CommitAsync(cancellationToken);
             logger.LogInformation("Project control schema and seed applied successfully.");
@@ -208,6 +209,78 @@ public sealed class ProjectControlSchemaMigrator(
                     ON dbo.ProProyectosItems (idTenant, IdProyecto, IdEvento)
                     WHERE IdEvento IS NOT NULL;
             """,
+
+            // --- AURA_PROTOCOL v2.1 (AURA-PROTOCOL-V2-01): workstream + lease + credenciales ---
+            // Todo aditivo/nullable; ninguna fila historica ni comportamiento existente cambia
+            // mientras sWorkStream siga NULL. Ver docs/aura/AURA_PROTOCOL_v2.1.md.
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectoEXEC') AND name = 'sWorkStream')
+                ALTER TABLE dbo.ProProyectoEXEC ADD sWorkStream nvarchar(100) NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosItems') AND name = 'sWorkStream')
+                ALTER TABLE dbo.ProProyectosItems ADD sWorkStream nvarchar(100) NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosItems') AND name = 'LeaseId')
+                ALTER TABLE dbo.ProProyectosItems ADD LeaseId uniqueidentifier NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosItems') AND name = 'LeaseVersion')
+                ALTER TABLE dbo.ProProyectosItems ADD LeaseVersion bigint NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosItems') AND name = 'LeaseExpiresAtUtc')
+                ALTER TABLE dbo.ProProyectosItems ADD LeaseExpiresAtUtc datetime2 NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosItems') AND name = 'IdCredential')
+                ALTER TABLE dbo.ProProyectosItems ADD IdCredential int NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'AgentCredential' AND schema_id = SCHEMA_ID('dbo'))
+                CREATE TABLE dbo.AgentCredential (
+                    idTenant int NOT NULL,
+                    IdCredential int NOT NULL,
+                    nActorTipo tinyint NOT NULL,
+                    sAgentName nvarchar(100) NOT NULL,
+                    LinkedActorId int NULL,
+                    SecretSalt varbinary(16) NOT NULL,
+                    SecretHash varbinary(32) NOT NULL,
+                    SecretIterations int NOT NULL,
+                    CreatedAtUtc datetime2 NOT NULL,
+                    RevokedAtUtc datetime2 NULL,
+                    LastUsedAtUtc datetime2 NULL,
+                    RotatedFromCredentialId int NULL,
+                    CONSTRAINT PK_AgentCredential PRIMARY KEY (idTenant, IdCredential)
+                );
+            """,
+
+            // --- Login básico de humanos (2026-08-28): email + contraseña sobre Usuarios ---
+            // Aditivo/nullable; filas humanas existentes sin email/contraseña siguen intactas y
+            // simplemente no pueden loguearse todavía.
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Usuarios') AND name = 'sEmail')
+                ALTER TABLE dbo.Usuarios ADD sEmail nvarchar(200) NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Usuarios') AND name = 'sPasswordSalt')
+                ALTER TABLE dbo.Usuarios ADD sPasswordSalt varbinary(16) NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Usuarios') AND name = 'sPasswordHash')
+                ALTER TABLE dbo.Usuarios ADD sPasswordHash varbinary(32) NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Usuarios') AND name = 'nPasswordIterations')
+                ALTER TABLE dbo.Usuarios ADD nPasswordIterations int NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.Usuarios') AND name = 'UX_Usuarios_Tenant_Email')
+                CREATE UNIQUE INDEX UX_Usuarios_Tenant_Email
+                    ON dbo.Usuarios (IdTenant, sEmail)
+                    WHERE sEmail IS NOT NULL;
+            """,
         };
 
         foreach (var statement in statements)
@@ -274,6 +347,77 @@ public sealed class ProjectControlSchemaMigrator(
             insertCommand.Parameters.AddWithValue("@path", (object?)path ?? DBNull.Value);
             insertCommand.Parameters.AddWithValue("@code", code);
             await insertCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Seeds the default owner login (tenant 1, IdUsuario 1) once - only when that user has no
+    /// email configured yet, so a login the user later changes by hand is never overwritten by
+    /// a subsequent run of this migrator. See the "login básico" request this was built for.
+    /// </summary>
+    private static async Task SeedDefaultHumanLoginAsync(SqlConnection connection, SqlTransaction transaction, CancellationToken cancellationToken)
+    {
+        const int userId = 1;
+        const string name = "Arnaldo Benitez";
+        const string email = "arnaldo@productorbenitez.com";
+        const string password = "Cataratas3";
+
+        await using var checkCommand = connection.CreateCommand();
+        checkCommand.Transaction = transaction;
+        checkCommand.CommandText = "SELECT sEmail FROM dbo.Usuarios WHERE IdTenant = @tenantId AND IdUsuario = @userId;";
+        checkCommand.Parameters.AddWithValue("@tenantId", TenantId);
+        checkCommand.Parameters.AddWithValue("@userId", userId);
+        var existingEmailResult = await checkCommand.ExecuteScalarAsync(cancellationToken);
+
+        if (existingEmailResult is not null && existingEmailResult != DBNull.Value)
+        {
+            // Ya tiene login configurado (siembra previa, o cambiado a mano por el usuario):
+            // nunca se pisa.
+            return;
+        }
+
+        var (salt, hash) = AURA.Application.Security.Pbkdf2PasswordHasher.Hash(System.Text.Encoding.UTF8.GetBytes(password));
+        var rowExists = existingEmailResult is not null;
+
+        if (!rowExists)
+        {
+            await using var insertCommand = connection.CreateCommand();
+            insertCommand.Transaction = transaction;
+            insertCommand.CommandText =
+                """
+                INSERT INTO dbo.Usuarios (IdTenant, IdUsuario, sNombre, sEmail, sPasswordSalt, sPasswordHash, nPasswordIterations)
+                VALUES (@tenantId, @userId, @name, @email, @salt, @hash, @iterations);
+                """;
+            insertCommand.Parameters.AddWithValue("@tenantId", TenantId);
+            insertCommand.Parameters.AddWithValue("@userId", userId);
+            insertCommand.Parameters.AddWithValue("@name", name);
+            insertCommand.Parameters.AddWithValue("@email", email);
+            insertCommand.Parameters.Add("@salt", System.Data.SqlDbType.VarBinary).Value = salt;
+            insertCommand.Parameters.Add("@hash", System.Data.SqlDbType.VarBinary).Value = hash;
+            insertCommand.Parameters.AddWithValue("@iterations", AURA.Application.Security.Pbkdf2PasswordHasher.Iterations);
+            await insertCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+        else
+        {
+            // La fila ya existia (p. ej. como responsable/actor humano de eventos previos) pero
+            // sin login todavia: se le agrega, estableciendo tambien el nombre por defecto
+            // pedido para este primer usuario.
+            await using var updateCommand = connection.CreateCommand();
+            updateCommand.Transaction = transaction;
+            updateCommand.CommandText =
+                """
+                UPDATE dbo.Usuarios
+                SET sNombre = @name, sEmail = @email, sPasswordSalt = @salt, sPasswordHash = @hash, nPasswordIterations = @iterations
+                WHERE IdTenant = @tenantId AND IdUsuario = @userId;
+                """;
+            updateCommand.Parameters.AddWithValue("@tenantId", TenantId);
+            updateCommand.Parameters.AddWithValue("@userId", userId);
+            updateCommand.Parameters.AddWithValue("@name", name);
+            updateCommand.Parameters.AddWithValue("@email", email);
+            updateCommand.Parameters.Add("@salt", System.Data.SqlDbType.VarBinary).Value = salt;
+            updateCommand.Parameters.Add("@hash", System.Data.SqlDbType.VarBinary).Value = hash;
+            updateCommand.Parameters.AddWithValue("@iterations", AURA.Application.Security.Pbkdf2PasswordHasher.Iterations);
+            await updateCommand.ExecuteNonQueryAsync(cancellationToken);
         }
     }
 }

@@ -15,17 +15,24 @@ public sealed class ProjectHistoryEndpointTests(ProjectControlDatabaseFixture fi
         Skip.IfNot(fixture.IsAvailable, "Requiere conectividad con el SQL Server de desarrollo (AURA_DESIGNTIME_CONNSTR o User Secrets de AURA.Api).");
     }
 
-    private Task<HttpResponseMessage> PostEventRawAsync(
+    private async Task<HttpResponseMessage> PostEventRawAsync(
         int tenantId, string projectCode, Guid eventId, long? expectedPreviousItemId, string summary,
         string actorType = "HUMAN", int actorId = 1, string? model = null,
-        string? agent = null, string? environment = null, string eventType = "PROGRESS")
+        string? agent = null, string? environment = null, string eventType = "PROGRESS",
+        Guid? leaseId = null, long? expectedLeaseVersion = null)
     {
         var request = new RegisterProjectEventRequest(
             tenantId, projectCode, eventId, expectedPreviousItemId, eventType,
             new ProjectActorRefDto(actorType, actorId), agent, environment,
-            "IN_PROGRESS", summary, null, null, null, null, null, null, null, null, model);
+            "IN_PROGRESS", summary, null, null, null, null, null, null, null, null, model,
+            null, leaseId, expectedLeaseVersion);
 
-        return fixture.Client.PostAsJsonAsync("/api/project-control/events", request, JsonOptions);
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/project-control/events")
+        {
+            Content = JsonContent.Create(request, options: JsonOptions),
+        };
+        fixture.AddBearer(httpRequest, tenantId, actorType);
+        return await fixture.Client.SendAsync(httpRequest);
     }
 
     [SkippableFact]
@@ -40,10 +47,13 @@ public sealed class ProjectHistoryEndpointTests(ProjectControlDatabaseFixture fi
             eventType: "CLAIM");
         var firstBody = await first.Content.ReadFromJsonAsync<JsonElement>();
         var firstItemId = firstBody.GetProperty("itemId").GetInt64();
+        var lease = firstBody.GetProperty("lease");
+        var leaseId = lease.GetProperty("leaseId").GetGuid();
+        var leaseVersion = lease.GetProperty("version").GetInt64();
 
         await PostEventRawAsync(
             ProjectControlDatabaseFixture.PrimaryTenantId, "HISTORYORDER", Guid.NewGuid(), firstItemId, "Segundo evento",
-            agent: "CODEX", environment: "Codex CLI");
+            agent: "CODEX", environment: "Codex CLI", leaseId: leaseId, expectedLeaseVersion: leaseVersion);
 
         var history = await fixture.Client.GetFromJsonAsync<ProjectHistoryDto>(
             $"/api/project-control/projects/HISTORYORDER/events?tenantId={ProjectControlDatabaseFixture.PrimaryTenantId}", JsonOptions);

@@ -9,13 +9,29 @@ public enum ProjectEventOutcomeStatus
     ProjectNotFound,
     Conflict,
     InvalidTransition,
+    // AURA_PROTOCOL v2.1 lease/concurrency outcomes - see docs/aura/AURA_PROTOCOL_v2.1.md.
+    LeaseConflict,
+    LeaseExpired,
 }
+
+public sealed record LeaseSnapshot(
+    Guid LeaseId,
+    long Version,
+    DateTime ExpiresAtUtc,
+    ProjectActorType HolderActorType,
+    int? HolderActorId,
+    // Authenticated credential currently backing this lease - null right after a HANDOFF, until
+    // whoever was declared as the next control actually authenticates and acts (see
+    // docs/aura/AURA_PROTOCOL_v2.1.md "Lease y concurrencia optimista"). Never sent to clients;
+    // internal to how the repository verifies who may act next.
+    int? HolderCredentialId = null);
 
 public sealed record ProjectEventOutcome(
     ProjectEventOutcomeStatus Status,
     long? ItemId,
     long? CurrentLastItemId,
-    string? ErrorMessage = null);
+    string? ErrorMessage = null,
+    LeaseSnapshot? Lease = null);
 
 public sealed record ProjectEventCommand(
     int TenantId,
@@ -38,7 +54,15 @@ public sealed record ProjectEventCommand(
     string? NextAction,
     string? Blocker,
     string? Reference,
-    string? Model);
+    string? Model,
+    string? WorkStream = null,
+    Guid? LeaseId = null,
+    long? ExpectedLeaseVersion = null,
+    int? CredentialId = null,
+    // Lease duration for a CLAIM/REQUEST that (re)acquires the lease; the repository applies a
+    // configured default when null. Kept on the command so the service layer (which reads
+    // configuration) controls it rather than the repository hardcoding a value.
+    TimeSpan? LeaseDuration = null);
 
 public enum CreateProjectOutcomeStatus
 {

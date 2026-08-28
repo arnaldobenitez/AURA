@@ -123,13 +123,15 @@ export class CreateProjectApiError extends Error {
   }
 }
 
+import { authFetch } from "./auth";
+
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
 
 export async function fetchProjectControlBoard(
   tenantId: number,
   signal?: AbortSignal,
 ): Promise<ProjectControlBoard> {
-  const response = await fetch(`${apiBaseUrl}/api/project-control?tenantId=${tenantId}`, { signal });
+  const response = await authFetch(`${apiBaseUrl}/api/project-control?tenantId=${tenantId}`, { signal });
 
   if (!response.ok) {
     throw new Error(`No se pudo obtener el tablero de proyectos (HTTP ${response.status}).`);
@@ -143,7 +145,7 @@ export async function fetchProjectHistory(
   projectCode: string,
   signal?: AbortSignal,
 ): Promise<ProjectHistory | null> {
-  const response = await fetch(
+  const response = await authFetch(
     `${apiBaseUrl}/api/project-control/projects/${encodeURIComponent(projectCode)}/events?tenantId=${tenantId}`,
     { signal },
   );
@@ -163,7 +165,7 @@ export async function createProject(
   request: CreateProjectRequest,
   signal?: AbortSignal,
 ): Promise<CreateProjectResponse> {
-  const response = await fetch(`${apiBaseUrl}/api/project-control/projects`, {
+  const response = await authFetch(`${apiBaseUrl}/api/project-control/projects`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),

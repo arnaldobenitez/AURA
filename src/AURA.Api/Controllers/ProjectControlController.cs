@@ -1,15 +1,40 @@
 using AURA.Api.Contracts;
+using AURA.Application.AgentCredential;
 using AURA.Application.ProjectControl;
+using AURA.Domain.ProjectControl;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace AURA.Api.Controllers;
 
-// NOTE: this endpoint has no authentication yet. It must not be exposed outside a
-// controlled/trusted environment until real auth is added (see README).
+// Login básico (2026-08-28): tanto lectura como escritura exigen ahora un JWT válido - un
+// humano debe autenticarse (POST /api/auth/login) para poder ver el tablero, no solo para
+// escribir. Ver docs/aura/AURA_PROTOCOL_v2.1.md.
 [ApiController]
 [Route("api/project-control")]
+[Authorize]
 public sealed class ProjectControlController(ProjectControlService projectControlService) : ControllerBase
 {
+    /// <summary>
+    /// Deriva la identidad autenticada a partir de los claims del JWT ya validado por el
+    /// middleware - nunca del cuerpo del request. Ver AuraJwtClaimTypes/JwtAccessTokenIssuer.
+    /// </summary>
+    private AuthenticatedActor GetAuthenticatedActor()
+    {
+        var user = HttpContext.User;
+        var tenantId = int.Parse(user.FindFirst(AuraJwtClaimTypes.TenantId)!.Value);
+        var credentialId = int.Parse(user.FindFirst(AuraJwtClaimTypes.CredentialId)!.Value);
+        var actorTypeCode = user.FindFirst(AuraJwtClaimTypes.ActorType)!.Value;
+        ProjectControlCodes.TryParseActorType(actorTypeCode, out var actorType);
+        var linkedActorIdClaim = user.FindFirst(AuraJwtClaimTypes.LinkedActorId)?.Value;
+        var agentName = user.FindFirst(AuraJwtClaimTypes.AgentName)?.Value ?? string.Empty;
+
+        return new AuthenticatedActor(
+            tenantId, credentialId, actorType,
+            linkedActorIdClaim is null ? null : int.Parse(linkedActorIdClaim),
+            agentName);
+    }
+
     [HttpGet]
     public async Task<ActionResult<ProjectControlBoardDto>> GetBoard(
         [FromQuery] int tenantId,
@@ -88,17 +113,17 @@ public sealed class ProjectControlController(ProjectControlService projectContro
         [FromBody] RegisterProjectEventRequest request,
         CancellationToken cancellationToken)
     {
-        var result = await projectControlService.RegisterEventAsync(request, cancellationToken);
+        var result = await projectControlService.RegisterEventAsync(request, GetAuthenticatedActor(), cancellationToken);
 
         switch (result.Status)
         {
             case RegisterProjectEventStatus.Created:
                 return StatusCode(
                     StatusCodes.Status201Created,
-                    new ProjectControlEventResponse("CREATED", result.ItemId, null));
+                    new ProjectControlEventResponse("CREATED", result.ItemId, null, result.Lease));
 
             case RegisterProjectEventStatus.AlreadyExists:
-                return Ok(new ProjectControlEventResponse("ALREADY_EXISTS", result.ItemId, null));
+                return Ok(new ProjectControlEventResponse("ALREADY_EXISTS", result.ItemId, null, result.Lease));
 
             case RegisterProjectEventStatus.ProjectNotFound:
                 return Problem(
@@ -108,6 +133,15 @@ public sealed class ProjectControlController(ProjectControlService projectContro
 
             case RegisterProjectEventStatus.Conflict:
                 return Conflict(new ProjectControlEventResponse("CONFLICT", null, result.CurrentLastItemId));
+
+            case RegisterProjectEventStatus.LeaseConflict:
+                return Conflict(new ProjectControlEventResponse("LEASE_CONFLICT", null, null, result.Lease));
+
+            case RegisterProjectEventStatus.Forbidden:
+                return Problem(
+                    title: "No autorizado.",
+                    detail: result.ValidationErrors is { Count: > 0 } ? result.ValidationErrors[0] : "La credencial autenticada no puede registrar este evento.",
+                    statusCode: StatusCodes.Status403Forbidden);
 
             case RegisterProjectEventStatus.ValidationFailed:
                 return BadRequest(new ProjectControlValidationProblemResponse(

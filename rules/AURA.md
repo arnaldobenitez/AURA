@@ -1,3 +1,18 @@
+```text
+STATUS: OBSOLETE
+SUPERSEDED BY: AURA_PROTOCOL v2.0 (docs/aura/AURA_PROTOCOL_v2.md)
+```
+
+> Este archivo documenta el protocolo AURA anterior a v2.0. AURA_PROTOCOL v2.0
+> (`docs/aura/AURA_PROTOCOL_v2.md`) es la especificación vigente; este archivo se conserva
+> como historial y, mientras v2.0 permanezca en estado `DESIGNED_PENDING_ACTIVATION`
+> (ver `docs/aura/PROTOCOL_VERSIONING.md`), como referencia operativa de respaldo hasta que
+> un Analista autorice la activación general de v2.0. A partir de esa activación, ningún
+> agente debe usar el contenido de este archivo como protocolo vigente ni como fallback
+> operativo. No se modificó el contenido original más allá de este encabezado.
+
+---
+
 # Memoria permanente AURA - versión 2026-08-16.2
 
 ## Proyecto
