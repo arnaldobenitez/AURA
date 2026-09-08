@@ -1,0 +1,29 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!--
+    AURA_PROJECT_MEMORY v1.0 is normative and lives only in docs/aura/AURA_PROJECT_MEMORY_v1.0.md
+    and docs/aura/project-memory/ (schemas + templates). This library must never hardcode a second
+    copy of that content: the files below are linked from their single canonical location and
+    embedded into the assembly, so the tool has no runtime dependency on the AURA repository path
+    (see TemplateProvider and ManifestSchemaProvider).
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\docs\aura\project-memory\schemas\project.schema.json" Link="Schemas\project.schema.json" />
+    <EmbeddedResource Include="..\..\docs\aura\project-memory\schemas\machine.schema.json" Link="Schemas\machine.schema.json" />
+    <EmbeddedResource Include="..\..\docs\aura\project-memory\templates\AURA.md" Link="Templates\AURA.md" />
+    <EmbeddedResource Include="..\..\docs\aura\project-memory\templates\00-PROYECTO.md" Link="Templates\00-PROYECTO.md" />
+    <EmbeddedResource Include="..\..\docs\aura\project-memory\templates\01-ESTADO-ACTUAL.md" Link="Templates\01-ESTADO-ACTUAL.md" />
+    <EmbeddedResource Include="..\..\docs\aura\project-memory\templates\SESSION.md" Link="Templates\SESSION.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="JsonSchema.Net" Version="9.4.0" />
+  </ItemGroup>
+
+</Project>
