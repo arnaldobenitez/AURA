@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1.0",
+  "projectMemoryVersion": "1.0",
+  "projectId": "ba3a550e-2304-4b95-b742-5fff7ece99d7",
+  "projectName": "AURA",
+  "documentation": {
+    "project": "docs/00-PROYECTO.md",
+    "currentState": "docs/01-ESTADO-ACTUAL.md",
+    "history": "docs/historial"
+  },
+  "createdAt": "2026-09-05T17:56:33.9180325\u002B00:00"
+}
