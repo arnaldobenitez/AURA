@@ -1,15 +1,16 @@
 # Estado actual
 
 Última actualización: 2026-09-08
-Última sesión: `d37835bc-d6fb-4387-83c1-a33a68b49a31`
-Estado general: Project Memory operativo; working tree saneado en commits lógicos sobre `aa54e2f`.
+Última sesión: `4872bc7f-7d08-40c4-9bef-4cfb80bb4b30`
+Estado general: Project Memory operativo; repositorio limpio y cerrado hasta este punto.
 
 ## Resumen ejecutivo
 
-Post Etapa 9: los cambios acumulados de las etapas 1 a 9 fueron organizados en seis commits lógicos
-y revisables (especificación, librería runtime, Agent Contract, Project Manager, CLI/tests y adopción).
-El working tree quedó limpio salvo `appversion.json` (modificación ajena, excluida) y `.claude/`
-(configuración local de IDE, excluida). No se hizo push ni se reescribió historial.
+Post Etapa 9: los cambios acumulados de las etapas 1 a 9 fueron organizados en siete commits lógicos
+y revisables (especificación, librería runtime, Agent Contract, Project Manager, CLI/tests, adopción
+y registro de sesión). Limpieza final: `appversion.json` fue restaurado (bump local ajeno) y `.claude/`
+quedó excluido localmente vía `.git/info/exclude`. Working tree limpio. No se hizo push ni se
+reescribió historial; el push queda como decisión manual pendiente.
 
 ## Implementado
 
@@ -19,7 +20,8 @@ El working tree quedó limpio salvo `appversion.json` (modificación ajena, excl
 - Guía práctica en `docs/aura/AURA_PROJECT_MEMORY_ADOPTION.md`.
 - `rules/AURA.md` declara explícitamente sus fuentes normativas actuales y la no prevalencia del contenido legacy.
 - Tests de inicialización parcial y de protección documental.
-- Saneamiento Git: seis commits lógicos (`eb84a8c`..`9f87e1b`) ordenan todo el trabajo de Project Memory.
+- Saneamiento Git: siete commits lógicos (`eb84a8c`..`39e0e38`) ordenan todo el trabajo de Project Memory.
+- Limpieza final: residuos `appversion.json` y `.claude/` resueltos sin commits ajenos ni borrados.
 
 ## En curso
 
@@ -27,8 +29,8 @@ Nada dentro del alcance de Etapa 9.
 
 ## Pendiente inmediato
 
-No hay pendientes para el cierre de Project Memory. `appversion.json` conserva un cambio local pendiente
-de revisión del responsable; `.claude/` queda sin trackear. La instalación global de `aura` y una eventual
+No hay pendientes para el cierre de Project Memory. El repositorio quedó limpio y listo para revisión;
+el push remoto es una decisión manual pendiente de Arnaldo. La instalación global de `aura` y una eventual
 UI web quedan fuera de alcance y pueden evaluarse en etapas posteriores.
 
 ## Bloqueos
