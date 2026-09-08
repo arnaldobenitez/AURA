@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aura.aguarapp.com/schemas/project-memory/project.schema.json",
+  "title": "AURA Project Memory project manifest",
+  "description": "Portable manifest for PROJECT_ROOT. Paths are relative to PROJECT_ROOT.",
+  "type": "object",
+  "required": ["schemaVersion", "projectMemoryVersion", "projectId", "projectName", "documentation"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "projectMemoryVersion": { "const": "1.0" },
+    "projectId": {
+      "type": "string",
+      "description": "Stable UUID version 4 of the logical project.",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "projectName": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "status": {
+      "type": "string",
+      "description": "Small project-level status vocabulary; consumers may define additional values.",
+      "pattern": "^[a-z][a-z0-9-]{0,31}$"
+    },
+    "documentation": {
+      "type": "object",
+      "required": ["project", "currentState", "history"],
+      "properties": {
+        "project": { "$ref": "#/$defs/relativePath" },
+        "currentState": { "$ref": "#/$defs/relativePath" },
+        "history": { "$ref": "#/$defs/relativePath" },
+        "decisions": { "$ref": "#/$defs/relativePath" },
+        "backlog": { "$ref": "#/$defs/relativePath" },
+        "architecture": { "$ref": "#/$defs/relativePath" }
+      },
+      "additionalProperties": { "$ref": "#/$defs/relativePath" }
+    },
+    "modules": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_-]{0,63}$" }
+    }
+  },
+  "$defs": {
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!\\\\)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    }
+  },
+  "additionalProperties": true
+}

@@ -18,6 +18,20 @@ carries one.
 Each profile is intentionally small: identity + role + how to authenticate + where to fetch the
 real protocol + what to do if AURA is unreachable. Nothing else.
 
+## Common Project Memory discovery
+
+All profiles use the same generic discovery rule and do not duplicate `templates/AURA.md`:
+
+```text
+If the working project contains .aura/project.json:
+  resolve PROJECT_ROOT using the nearest valid manifest;
+  read AURA.md, the manifest, and the Project Memory Core;
+  load optional modules only when the task requires them.
+Project Memory is local documentation; it does not grant operational authority or replace AURA read-back.
+```
+
+This rule applies equally to `ANALYST`, `CODING_AGENT`, `AUTONOMOUS_AGENT`, and future roles. A profile may continue locally when the API is unavailable, but must record operational synchronization as pending and must not fabricate events, leases, or read-back.
+
 ## AURA_BOOTSTRAP_ANALYST_v2
 
 ```text

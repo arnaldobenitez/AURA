@@ -220,3 +220,18 @@ everything the dashboard shows, identical to before this change. `IdUsuario = 1`
 other logged-in user — there is exactly one seeded account today, so the distinction has no
 observable effect yet. If per-user permissions are wanted later, that is new, separate work.
 
+## 13. AURA Project Memory
+
+`AURA_PROJECT_MEMORY v1.0` is the portable, local documentation layer for projects that adopt AURA. Its normative specification and reusable contracts live in `docs/aura/AURA_PROJECT_MEMORY_v1.0.md` and `docs/aura/project-memory/`.
+
+Project Memory and this operational protocol are complementary but independent:
+
+- `AURA_PROTOCOL` defines operational authority, authentication, leases, events, control, operational state and required read-back.
+- Project Memory defines portable context, consolidated documentation, decisions, backlog, architecture and semantic session history.
+
+Before a relevant task, an agent may load Project Memory when the working project contains `.aura/project.json`: resolve `PROJECT_ROOT`, read `AURA.md`, the manifest, `docs/00-PROYECTO.md` and `docs/01-ESTADO-ACTUAL.md`, then load optional modules progressively. At the end of a relevant session, it should update local documentation according to Project Memory.
+
+Updating Project Memory does **not** constitute an AURA event, acquire a lease, grant authority, or prove an operational state change. A local session may be recorded while the API is unavailable, but the agent must not claim an event, lease, read-back or operational confirmation that was not actually verified. When the two planes disagree, operational authority remains governed by this protocol and its official state source; the discrepancy must be documented and reconciled without silently overwriting either plane.
+
+Project Memory never changes the authority restrictions of this protocol and does not require API access, Git, or a specific agent.
+

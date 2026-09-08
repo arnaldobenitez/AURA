@@ -1,15 +1,17 @@
 ```text
-STATUS: OBSOLETE
-SUPERSEDED BY: AURA_PROTOCOL v2.0 (docs/aura/AURA_PROTOCOL_v2.md)
+STATUS: LEGACY_COMPATIBILITY_POINTER
+NORMATIVE OPERATIONAL PROTOCOL: AURA_PROTOCOL v2.1 (docs/aura/AURA_PROTOCOL_v2.1.md)
+PROJECT MEMORY: AURA_PROJECT_MEMORY v1.0 (docs/aura/AURA_PROJECT_MEMORY_v1.0.md)
+AGENT INTEGRATION CONTRACT: AURA_AGENT_CONTRACT v1.0 (docs/aura/AURA_AGENT_CONTRACT_v1.0.md)
 ```
 
-> Este archivo documenta el protocolo AURA anterior a v2.0. AURA_PROTOCOL v2.0
-> (`docs/aura/AURA_PROTOCOL_v2.md`) es la especificación vigente; este archivo se conserva
-> como historial y, mientras v2.0 permanezca en estado `DESIGNED_PENDING_ACTIVATION`
-> (ver `docs/aura/PROTOCOL_VERSIONING.md`), como referencia operativa de respaldo hasta que
-> un Analista autorice la activación general de v2.0. A partir de esa activación, ningún
-> agente debe usar el contenido de este archivo como protocolo vigente ni como fallback
-> operativo. No se modificó el contenido original más allá de este encabezado.
+> Este archivo es únicamente un puntero de compatibilidad para herramientas que todavía lo descubren. No es una
+> especificación normativa y el contenido legacy inferior no prevalece ni debe interpretarse como protocolo vigente.
+> Las fuentes normativas actuales son `docs/aura/AURA_PROTOCOL_v2.1.md`, `docs/aura/AURA_PROJECT_MEMORY_v1.0.md`
+> y `docs/aura/AURA_AGENT_CONTRACT_v1.0.md`. La versión operativa se descubre mediante `GET /api/aura-protocol`
+> y el documento indicado por `sourceDocument`, conforme a `docs/aura/PROTOCOL_VERSIONING.md`. Project Memory se
+> descubre mediante `.aura/project.json` y sus documentos Core. Ante cualquier contradicción, prevalecen siempre las
+> fuentes normativas vigentes; no se debe inventar estado operativo a partir de este puntero ni de su contenido legacy.
 
 ---
 
@@ -19,8 +21,9 @@ SUPERSEDED BY: AURA_PROTOCOL v2.0 (docs/aura/AURA_PROTOCOL_v2.md)
 
 - `projectCode`: `AURA`
 - `tenantId`: `1`
-- Fuente canónica del protocolo: este archivo.
-- Fuente del estado operativo: API de AURA.
+- Este archivo es un puntero de compatibilidad; la fuente normativa operativa se descubre conforme a `docs/aura/PROTOCOL_VERSIONING.md`.
+- La fuente del estado operativo es la API de AURA cuando el protocolo operativo la requiera.
+- La fuente normativa de Project Memory es `docs/aura/AURA_PROJECT_MEMORY_v1.0.md`.
 
 Este archivo contiene reglas compartidas, no el estado transitorio de una sesión. No guardar aquí el último actor, modelo, etapa, porcentajes o responsable actual.
 

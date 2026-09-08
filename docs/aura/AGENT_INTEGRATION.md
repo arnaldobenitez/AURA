@@ -138,9 +138,36 @@ expect is proof.
 | `400 VALIDATION_FAILED` | Contract or business-rule violation (see §8) — body includes the specific error list. |
 | `404` | Unknown `(tenantId, projectCode)`. |
 
-## 10. Capability negotiation (what to do if you can't do all of this)
+## 10. AURA Project Memory
+
+When the working directory belongs to a project containing `.aura/project.json`, load Project Memory independently of the operational AURA API:
+
+1. Resolve `PROJECT_ROOT` using the nearest valid `.aura/project.json`.
+2. Read `AURA.md`, the manifest, `docs/00-PROYECTO.md`, and `docs/01-ESTADO-ACTUAL.md`.
+3. Load optional modules only when the task needs them.
+4. Determine the operational role and continue with this protocol's authority, authentication, lease, event, and read-back rules.
+5. For a relevant session, update consolidated local documents and append one semantic session record; never overwrite history.
+
+Project Memory is not an AURA event. A document update does not prove an event, lease, handoff, or read-back. If the API is unavailable, the agent may read and update local Project Memory and record the limitation, but must not claim operational synchronization or invent confirmation. If Project Memory is incomplete, classify the condition as `ERROR` for missing/invalid Core, `WARNING` for a declared optional module that is absent, or `INFO` for an absent `AGENTS.md`/Git/API; continue only when the task can be performed safely.
+
+If local documented state conflicts with operational state, use the official AURA operational source for authority and control, retain the local documentation as evidence of the documented state, and record the discrepancy for reconciliation. Neither plane silently overwrites the other.
+
+## 11. Capability negotiation (what to do if you can't do all of this)
 
 If your environment cannot make outbound HTTP calls at all (conversational-only access), you
 cannot participate in AURA's live protocol. Say so explicitly rather than fabricating a
 synchronized state. Do not attempt to use SQL directly as a substitute under any circumstance —
 this is an explicit rule of the protocol (`AURA_PROTOCOL_v2.md` §14), not just a suggestion.
+
+## 12. Interoperability dogfood — Etapa 7B
+
+Se realizó una prueba real de interoperabilidad entre agentes sobre este repositorio. El agente
+resolvió `PROJECT_ROOT`, ejecutó el bootstrap estructurado antes de modificar documentación y
+obtuvo `project.valid = true`, `projectId = ba3a550e-2304-4b95-b742-5fff7ece99d7`, Core válido,
+sesiones locales vacías y contexto Git disponible. Luego abrió una sesión, actualizó el estado
+consolidado y cerró la sesión mediante el flujo Project Memory.
+
+La prueba confirma que otro agente puede continuar desde `.aura/project.json`, los documentos Core,
+`docs/01-ESTADO-ACTUAL.md` y el registro semántico append-only generado en `docs/historial/`.
+No se modificaron código de negocio ni arquitectura. Los módulos opcionales de decisiones,
+backlog y arquitectura no están presentes y no fueron creados para esta modificación menor.

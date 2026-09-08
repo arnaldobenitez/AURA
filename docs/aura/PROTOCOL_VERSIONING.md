@@ -103,3 +103,19 @@ When a version is superseded:
 `rules/AURA.md @ 2026-08-16.2` has already received this header as part of activating v2.0's
 design (see its own top section) — its operational content is otherwise untouched, since v2.0
 is not yet `ACTIVE` (§3) and nothing should lose its only working fallback prematurely.
+
+## 7. AURA Project Memory versioning
+
+`AURA_PROJECT_MEMORY` is a separate transversal protocol and is not a version of `AURA_PROTOCOL`. Its current specification is `docs/aura/AURA_PROJECT_MEMORY_v1.0.md`; its physical contracts and templates are in `docs/aura/project-memory/`.
+
+| Artifact | Versioning authority | Current value |
+|---|---|---|
+| Operational protocol | `AuraProtocolMetadataProvider.Current` plus its source document | `AURA_PROTOCOL v2.1` (status remains `IMPLEMENTED_PENDING_PRODUCTION_VERIFICATION`) |
+| Project Memory semantics | `AURA_PROJECT_MEMORY` source document | `v1.0` — `STABLE` after Etapa 3 integration |
+| Project manifest structure | `schemas/project.schema.json` | `schemaVersion 1.0` |
+| Local machine profile structure | `schemas/machine.schema.json` | `schemaVersion 1.0` |
+| Reusable templates | `project-memory/README.md` and repository history | template set for Project Memory v1.0 |
+
+`projectMemoryVersion` in `.aura/project.json` identifies Project Memory only. It must not be interpreted as the current `AURA_PROTOCOL` version. A future Project Memory v1.1 may add compatible optional fields; a v2.0 may require migration. Unknown future major versions must not be accepted silently.
+
+Changing Project Memory semantics requires updating its source document, contracts/templates as applicable, and this cross-reference in one reviewed change. It does not require changing `AURA_PROTOCOL` metadata unless the operational protocol itself changes.

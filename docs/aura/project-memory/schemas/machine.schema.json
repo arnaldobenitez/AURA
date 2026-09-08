@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aura.aguarapp.com/schemas/project-memory/machine.schema.json",
+  "title": "AURA local machine profile",
+  "description": "Optional local profile kept outside a project. It is not portable project identity.",
+  "type": "object",
+  "required": ["schemaVersion", "machineId", "machineName"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "machineId": {
+      "type": "string",
+      "description": "Stable UUID version 4 for this local installation or profile.",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "machineName": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "displayName": { "type": "string", "minLength": 1, "maxLength": 200 }
+  },
+  "additionalProperties": true
+}
