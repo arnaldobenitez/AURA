@@ -1,7 +1,7 @@
 # Estado actual
 
-Última actualización: 2026-09-08
-Última sesión: `4872bc7f-7d08-40c4-9bef-4cfb80bb4b30`
+Última actualización: 2026-09-23
+Última sesión: `ca0b7d74-2ddf-41cd-8e74-74498a32010c`
 Estado general: Project Memory operativo; repositorio limpio y cerrado hasta este punto.
 
 ## Resumen ejecutivo
@@ -22,6 +22,10 @@ reescribió historial; el push queda como decisión manual pendiente.
 - Tests de inicialización parcial y de protección documental.
 - Saneamiento Git: siete commits lógicos (`eb84a8c`..`39e0e38`) ordenan todo el trabajo de Project Memory.
 - Limpieza final: residuos `appversion.json` y `.claude/` resueltos sin commits ajenos ni borrados.
+- Frontend `AURA.Web` (cambios sin commitear): la sesión web ya no se cierra por tiempo en el cliente —
+  solo se pide login al acceder sin sesión o si la API rechaza el token (401). El historial del detalle
+  de proyecto muestra lo más reciente primero por defecto e incorpora paginación (primera/anterior/
+  ir-a-página/siguiente/última, tamaños 10/20/30).
 
 ## En curso
 
