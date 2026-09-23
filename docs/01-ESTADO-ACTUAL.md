@@ -1,15 +1,15 @@
 # Estado actual
 
 Última actualización: 2026-09-23
-Última sesión: `a9af38fa-7c6b-4bfd-b590-d72099fdd92f`
+Última sesión: `adcfa998-d4af-4a46-b1e2-a0e5158febba`
 Estado general: Project Memory operativo; AURA ProjectControl incorpora Roadmap localmente. Migración y despliegue pendientes.
 
 ## Resumen ejecutivo
 
 Post Etapa 9, los cambios de Project Memory quedaron ordenados en commits lógicos y se completó el push
-manual previo. En esta sesión se implementó localmente Roadmap por EXEC/workstream, progreso y aprobación
-por AI_ANALYST designado, su modal compartido en la lista/detalle y AURA_PROTOCOL v2.2. La migración SQL
-aditiva no se aplicó y producción no se modificó. El working tree queda con cambios locales para revisión.
+manual previo. Roadmap y contrato v2.2 quedaron registrados en `19b87fb`; el adaptador de memoria se actualizó
+en `0193d1f`; la metadata de la publicación 0.8.00 quedó en `4543e28`. La migración SQL aditiva no se aplicó
+y producción no se modificó. Esta sesión agrega el historial del saneamiento de commits.
 
 ## Implementado
 
@@ -37,7 +37,7 @@ Roadmap v0.1 implementado en código y contrato localmente; sin aplicar el cambi
 
 ## Pendiente inmediato
 
-1. Revisar los cambios locales y aplicar `scripts/project-control-schema-update.ps1` únicamente en la base de desarrollo autorizada.
+1. Aplicar `scripts/project-control-schema-update.ps1` únicamente en la base de desarrollo autorizada; la migración no se ha ejecutado.
 2. Ejecutar las pruebas ProjectControl contra SQL Server después de la migración.
 3. Realizar despliegue y smoke test de producción cuando Arnaldo lo autorice; no se ejecutó en esta sesión.
 
