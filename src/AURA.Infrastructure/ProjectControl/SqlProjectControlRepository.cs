@@ -1,4 +1,6 @@
 using System.Data;
+using System.Text.Json;
+using AURA.Application.AgentCredential;
 using AURA.Application.ProjectControl;
 using AURA.Domain.ProjectControl;
 using AURA.Infrastructure.Persistence;
@@ -54,12 +56,20 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
             li.IdEtapa,
             li.sEtapa,
             li.nPorcEtapa,
-            li.nPorcEXEC,
+            CASE
+                WHEN execRow.nTotalEtapas > 0 AND EXISTS (
+                    SELECT 1 FROM dbo.ProProyectoRoadmapRevision roadmapRevision
+                    WHERE roadmapRevision.idTenant = c.idTenant AND roadmapRevision.IdProyecto = c.IdProyecto
+                      AND roadmapRevision.IdEXEC = li.IdEXEC)
+                THEN ROUND(CAST(closedStages.ClosedCount AS decimal(18, 2)) / execRow.nTotalEtapas * 100, 2)
+                ELSE li.nPorcEXEC
+            END AS nPorcEXEC,
             li.sResumen,
             li.sProximaAccion,
             li.sBloqueo,
             li.sReferencia,
             li.sModelo,
+            li.sWorkStream,
             execRow.nTotalEtapas AS ExecTotalStages,
             closedStages.ClosedCount,
             actorCoder.sNombre AS ActorCoderName,
@@ -86,7 +96,7 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
                 i.nCodificador, i.nAnalista, i.nHumano, i.nAgente, i.sAgente, i.sEntorno,
                 i.nControlTipo, i.nControlId, i.IdControlItem,
                 i.sDescripcion, i.IdEXEC, i.IdEtapa, i.sEtapa, i.nPorcEtapa, i.nPorcEXEC,
-                i.sResumen, i.sProximaAccion, i.sBloqueo, i.sReferencia, i.sModelo
+                i.sResumen, i.sProximaAccion, i.sBloqueo, i.sReferencia, i.sModelo, i.sWorkStream
             FROM dbo.ProProyectosItems i
             WHERE i.idTenant = c.idTenant AND i.IdProyecto = c.IdProyecto
             ORDER BY i.IdItems DESC
@@ -100,7 +110,7 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
             SELECT COUNT(*) AS ClosedCount
             FROM dbo.ProProyectoEtapa s
             WHERE s.idTenant = c.idTenant AND s.IdProyecto = c.IdProyecto AND s.IdEXEC = li.IdEXEC
-              AND s.nEstado = @approvedStageStatus
+              AND s.nEstado IN (@approvedStageStatus, @approvedWithWarningsStageStatus)
         ) closedStages
         LEFT JOIN dbo.Usuarios humanResponsible
             ON humanResponsible.IdTenant = c.idTenant AND humanResponsible.IdUsuario = c.nHumanoResponsable
@@ -141,6 +151,7 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
             command.CommandText = BoardSql;
             command.Parameters.AddWithValue("@tenantId", tenantId);
             command.Parameters.Add("@approvedStageStatus", SqlDbType.TinyInt).Value = (byte)ProjectStageStatus.Approved;
+            command.Parameters.Add("@approvedWithWarningsStageStatus", SqlDbType.TinyInt).Value = (byte)ProjectStageStatus.ApprovedWithWarnings;
 
             var results = new List<ProjectControlProjectDto>();
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -212,15 +223,41 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
             //    ultimo esta Completado.
             var exec = await ResolveOrCreateExecAsync(
                 connection, sqlTransaction, command.TenantId, projectId.Value, command.WorkStream, command.Details, command.TotalStages, cancellationToken);
+            await AcquireRoadmapLockAsync(connection, sqlTransaction, command.TenantId, projectId.Value, exec.ExecId, cancellationToken);
 
             // 2) Etapa: por descripcion (dentro del EXEC vigente) o heredada del evento anterior
             //    (solo si ese evento anterior pertenecia al MISMO EXEC).
             var inheritedStageId = chainState.ExecId == exec.ExecId ? chainState.StageId : null;
             var stage = await ResolveOrCreateStageAsync(
-                connection, sqlTransaction, command.TenantId, projectId.Value, exec.ExecId, command.Stage, inheritedStageId, cancellationToken);
+                connection, sqlTransaction, command.TenantId, projectId.Value, exec.ExecId,
+                command.Stage, command.StageCode, inheritedStageId, cancellationToken);
+            var roadmapConfigured = await HasRoadmapAsync(
+                connection, sqlTransaction, command.TenantId, projectId.Value, exec.ExecId, cancellationToken);
+
+            if (command.EventType == ProjectEventType.Progress && roadmapConfigured && command.StageCode is null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return new ProjectEventOutcome(
+                    ProjectEventOutcomeStatus.InvalidTransition, null, null, "stageCode es obligatorio para informar progreso en un Roadmap.");
+            }
+
+            if ((command.StageCode is not null && stage?.StageCode is null)
+                || (roadmapConfigured && command.Stage is not null && stage?.StageCode is null))
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return new ProjectEventOutcome(
+                    ProjectEventOutcomeStatus.InvalidTransition, null, null, "La etapa indicada no pertenece al Roadmap vigente.");
+            }
 
             if (stage is not null && command.StageProgress is not null)
             {
+                if (stage.Status != ProjectStageStatus.Open)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return new ProjectEventOutcome(
+                        ProjectEventOutcomeStatus.InvalidTransition, null, null, "La etapa está cerrada; debe reabrirse con REWORK antes de cambiar su avance.");
+                }
+
                 await UpdateStageProgressAsync(connection, sqlTransaction, command.TenantId, projectId.Value, exec.ExecId, stage.StageId, command.StageProgress.Value, cancellationToken);
                 stage = stage with { Progress = command.StageProgress };
             }
@@ -233,6 +270,11 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
             {
                 await transaction.RollbackAsync(cancellationToken);
                 return new ProjectEventOutcome(ProjectEventOutcomeStatus.InvalidTransition, null, null, transitionError);
+            }
+
+            if (command.EventType == ProjectEventType.Rework && stage is not null)
+            {
+                stage = stage with { Progress = 0m, Status = ProjectStageStatus.Open };
             }
 
             var execCompletedNow = command.EventType == ProjectEventType.Completion;
@@ -307,6 +349,349 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
         finally
         {
             await dbContext.Database.CloseConnectionAsync();
+        }
+    }
+
+    public async Task<ProjectRoadmapDto?> GetRoadmapAsync(
+        int tenantId, string projectCode, string? workStream, CancellationToken cancellationToken)
+    {
+        await dbContext.Database.OpenConnectionAsync(cancellationToken);
+        try
+        {
+            var connection = (SqlConnection)dbContext.Database.GetDbConnection();
+            var project = await FindProjectByCodeAsync(connection, null, tenantId, projectCode, cancellationToken);
+            if (project is not { } found)
+            {
+                return null;
+            }
+
+            int? execId = null;
+            int totalStages = 0;
+            await using (var execCommand = connection.CreateCommand())
+            {
+                execCommand.CommandText =
+                    "SELECT TOP (1) IdEXEC, nTotalEtapas FROM dbo.ProProyectoEXEC " +
+                    "WHERE idTenant = @tenantId AND IdProyecto = @projectId " +
+                    "AND (sWorkStream = @workStream OR (sWorkStream IS NULL AND @workStream IS NULL)) ORDER BY IdEXEC DESC;";
+                execCommand.Parameters.AddWithValue("@tenantId", tenantId);
+                execCommand.Parameters.AddWithValue("@projectId", found.ProjectId);
+                execCommand.Parameters.Add("@workStream", SqlDbType.NVarChar).Value = (object?)workStream ?? DBNull.Value;
+                await using var execReader = await execCommand.ExecuteReaderAsync(cancellationToken);
+                if (await execReader.ReadAsync(cancellationToken))
+                {
+                    execId = execReader.GetInt32(0);
+                    totalStages = execReader.IsDBNull(1) ? 0 : execReader.GetInt32(1);
+                }
+            }
+
+            if (execId is null)
+            {
+                return new ProjectRoadmapDto(found.ProjectId, projectCode, found.ProjectName, null, workStream, 0, 0, null, []);
+            }
+
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                "SELECT s.IdEtapa, s.sCodigo, s.nOrden, s.sDescripcion, s.sCriteriosAceptacion, s.nPorcEtapa, s.nEstado, " +
+                "s.IdCredentialValidador, validator.sAgentName, approval.sResultadoEtapa, approval.dFechaEntrada, " +
+                "approval.sAgente, approval.sModelo, approval.sResumen, approval.sReferencia " +
+                "FROM dbo.ProProyectoEtapa s " +
+                "LEFT JOIN dbo.AgentCredential validator ON validator.idTenant = s.idTenant AND validator.IdCredential = s.IdCredentialValidador " +
+                "OUTER APPLY (SELECT TOP (1) i.sResultadoEtapa, i.dFechaEntrada, i.sAgente, i.sModelo, i.sResumen, i.sReferencia " +
+                "FROM dbo.ProProyectosItems i WHERE i.idTenant = s.idTenant AND i.IdProyecto = s.IdProyecto AND i.IdEXEC = s.IdEXEC " +
+                "AND i.IdEtapa = s.IdEtapa AND i.nTipoEvento = @approvalEvent ORDER BY i.IdItems DESC) approval " +
+                "WHERE s.idTenant = @tenantId AND s.IdProyecto = @projectId AND s.IdEXEC = @execId ORDER BY s.nOrden, s.IdEtapa;";
+            command.Parameters.AddWithValue("@tenantId", tenantId);
+            command.Parameters.AddWithValue("@projectId", found.ProjectId);
+            command.Parameters.AddWithValue("@execId", execId.Value);
+            command.Parameters.Add("@approvalEvent", SqlDbType.TinyInt).Value = (byte)ProjectEventType.Approval;
+
+            var stages = new List<ProjectRoadmapStageDto>();
+            var closedStages = 0;
+            await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+            {
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    var statusValue = (ProjectStageStatus)reader.GetByte(6);
+                    var progress = reader.IsDBNull(5) ? (decimal?)null : reader.GetDecimal(5);
+                    var status = statusValue switch
+                    {
+                        ProjectStageStatus.Approved => "PASS",
+                        ProjectStageStatus.ApprovedWithWarnings => "PASS_WITH_WARNINGS",
+                        _ when progress == 100m => "PENDING_REVIEW",
+                        _ when progress is > 0m => "IN_PROGRESS",
+                        _ => "PENDING",
+                    };
+                    if (statusValue is ProjectStageStatus.Approved or ProjectStageStatus.ApprovedWithWarnings)
+                    {
+                        closedStages++;
+                    }
+
+                    var isApproved = statusValue is ProjectStageStatus.Approved or ProjectStageStatus.ApprovedWithWarnings;
+                    stages.Add(new ProjectRoadmapStageDto(
+                        reader.GetInt32(0),
+                        ReadNullableString(reader, "sCodigo"),
+                        reader.GetInt32(2),
+                        reader.GetString(3),
+                        ReadNullableString(reader, "sCriteriosAceptacion"),
+                        progress,
+                        status,
+                        ReadNullableInt32(reader, "IdCredentialValidador"),
+                        ReadNullableString(reader, "sAgentName"),
+                        isApproved ? ReadNullableString(reader, "sResultadoEtapa") : null,
+                        isApproved ? ReadNullableDateTime(reader, "dFechaEntrada") : null,
+                        isApproved ? ReadNullableString(reader, "sAgente") : null,
+                        isApproved ? ReadNullableString(reader, "sModelo") : null,
+                        isApproved ? ReadNullableString(reader, "sResumen") : null,
+                        isApproved ? ReadNullableString(reader, "sReferencia") : null));
+                }
+            }
+
+            totalStages = totalStages > 0 ? totalStages : stages.Count;
+            var progressTotal = totalStages > 0
+                ? Math.Round((decimal)closedStages / totalStages * 100m, 2, MidpointRounding.AwayFromZero)
+                : (decimal?)null;
+            return new ProjectRoadmapDto(found.ProjectId, projectCode, found.ProjectName, execId, workStream, totalStages, closedStages, progressTotal, stages);
+        }
+        finally
+        {
+            await dbContext.Database.CloseConnectionAsync();
+        }
+    }
+
+    public async Task<UpdateProjectRoadmapResult> UpdateRoadmapAsync(
+        string projectCode, UpdateProjectRoadmapRequest request, AuthenticatedActor actor, CancellationToken cancellationToken)
+    {
+        await dbContext.Database.OpenConnectionAsync(cancellationToken);
+        try
+        {
+            var connection = (SqlConnection)dbContext.Database.GetDbConnection();
+            var projectId = await FindProjectIdAsync(connection, null, request.TenantId, projectCode, cancellationToken);
+            if (projectId is null)
+            {
+                return new UpdateProjectRoadmapResult(UpdateProjectRoadmapStatus.ProjectNotFound);
+            }
+
+            await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+            var sqlTransaction = (SqlTransaction)transaction.GetDbTransaction();
+            var exec = await GetLatestExecAsync(connection, sqlTransaction, request.TenantId, projectId.Value, request.WorkStream, cancellationToken);
+            if (exec is null || exec.Status == ProjectExecStatus.Completed)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return new UpdateProjectRoadmapResult(UpdateProjectRoadmapStatus.ExecNotFound);
+            }
+
+            await AcquireRoadmapLockAsync(connection, sqlTransaction, request.TenantId, projectId.Value, exec.ExecId, cancellationToken);
+            await using (var duplicateCheck = connection.CreateCommand())
+            {
+                duplicateCheck.Transaction = sqlTransaction;
+                duplicateCheck.CommandText =
+                    "SELECT COUNT(1) FROM dbo.ProProyectoRoadmapRevision WHERE idTenant = @tenantId AND IdProyecto = @projectId AND IdEXEC = @execId AND IdEvento = @eventId;";
+                duplicateCheck.Parameters.AddWithValue("@tenantId", request.TenantId);
+                duplicateCheck.Parameters.AddWithValue("@projectId", projectId.Value);
+                duplicateCheck.Parameters.AddWithValue("@execId", exec.ExecId);
+                duplicateCheck.Parameters.AddWithValue("@eventId", request.EventId);
+                if ((int)(await duplicateCheck.ExecuteScalarAsync(cancellationToken))! > 0)
+                {
+                    await transaction.CommitAsync(cancellationToken);
+                    return new UpdateProjectRoadmapResult(UpdateProjectRoadmapStatus.Updated);
+                }
+            }
+
+            foreach (var stage in request.Stages)
+            {
+                await using var validatorCheck = connection.CreateCommand();
+                validatorCheck.Transaction = sqlTransaction;
+                validatorCheck.CommandText =
+                    "SELECT COUNT(1) FROM dbo.AgentCredential WHERE idTenant = @tenantId AND IdCredential = @credentialId AND nActorTipo = @aiAnalyst AND RevokedAtUtc IS NULL;";
+                validatorCheck.Parameters.AddWithValue("@tenantId", request.TenantId);
+                validatorCheck.Parameters.AddWithValue("@credentialId", stage.ValidatorCredentialId);
+                validatorCheck.Parameters.Add("@aiAnalyst", SqlDbType.TinyInt).Value = (byte)ProjectActorType.AiAnalyst;
+                if ((int)(await validatorCheck.ExecuteScalarAsync(cancellationToken))! == 0)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return new UpdateProjectRoadmapResult(
+                        UpdateProjectRoadmapStatus.InvalidPlan,
+                        [$"La credencial {stage.ValidatorCredentialId} no es un AI_ANALYST activo del tenant."]);
+                }
+            }
+
+            var existingStages = new List<(int Id, string? Code, string Description, decimal? Progress, ProjectStageStatus Status, int Order, string? Criteria, int? ValidatorId)>();
+            await using (var existingCommand = connection.CreateCommand())
+            {
+                existingCommand.Transaction = sqlTransaction;
+                existingCommand.CommandText =
+                    "SELECT IdEtapa, sCodigo, sDescripcion, nPorcEtapa, nEstado, nOrden, sCriteriosAceptacion, IdCredentialValidador " +
+                    "FROM dbo.ProProyectoEtapa WHERE idTenant = @tenantId AND IdProyecto = @projectId AND IdEXEC = @execId;";
+                existingCommand.Parameters.AddWithValue("@tenantId", request.TenantId);
+                existingCommand.Parameters.AddWithValue("@projectId", projectId.Value);
+                existingCommand.Parameters.AddWithValue("@execId", exec.ExecId);
+                await using var reader = await existingCommand.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    existingStages.Add((
+                        reader.GetInt32(0),
+                        ReadNullableString(reader, "sCodigo"),
+                        reader.GetString(2),
+                        ReadNullableDecimal(reader, "nPorcEtapa"),
+                        (ProjectStageStatus)reader.GetByte(4),
+                        reader.GetInt32(5),
+                        ReadNullableString(reader, "sCriteriosAceptacion"),
+                        ReadNullableInt32(reader, "IdCredentialValidador")));
+                }
+            }
+
+            var matchedStageIds = new HashSet<int>();
+            foreach (var stage in request.Stages.OrderBy(stage => stage.Order))
+            {
+                var trimmedCode = stage.StageCode.Trim();
+                var trimmedDescription = stage.Description.Trim();
+                var existing = existingStages.FirstOrDefault(candidate =>
+                    candidate.Code is not null
+                        ? string.Equals(candidate.Code, trimmedCode, StringComparison.OrdinalIgnoreCase)
+                        : string.Equals(candidate.Description, trimmedDescription, StringComparison.OrdinalIgnoreCase));
+
+                if (existing.Id > 0)
+                {
+                    matchedStageIds.Add(existing.Id);
+                    var changedDefinition = !string.Equals(existing.Description, trimmedDescription, StringComparison.Ordinal)
+                        || existing.Order != stage.Order
+                        || !string.Equals(existing.Criteria, stage.AcceptanceCriteria, StringComparison.Ordinal)
+                        || (existing.Code is not null && !string.Equals(existing.Code, trimmedCode, StringComparison.OrdinalIgnoreCase));
+                    var firstRoadmapMapping = existing.Code is null;
+                    if (changedDefinition && (existing.Progress is not null || existing.Status != ProjectStageStatus.Open) && !firstRoadmapMapping)
+                    {
+                        await transaction.RollbackAsync(cancellationToken);
+                        return new UpdateProjectRoadmapResult(
+                            UpdateProjectRoadmapStatus.PlanLocked,
+                            [$"La definición de la etapa {trimmedCode} no puede cambiar después de iniciar o aprobarse."]);
+                    }
+
+                    await using var update = connection.CreateCommand();
+                    update.Transaction = sqlTransaction;
+                    update.CommandText =
+                        "UPDATE dbo.ProProyectoEtapa SET sCodigo = @code, sDescripcion = @description, nOrden = @order, " +
+                        "sCriteriosAceptacion = @criteria, IdCredentialValidador = @validatorId " +
+                        "WHERE idTenant = @tenantId AND IdProyecto = @projectId AND IdEXEC = @execId AND IdEtapa = @stageId;";
+                    AddRoadmapStageParameters(update, request.TenantId, projectId.Value, exec.ExecId, stage, trimmedCode, trimmedDescription);
+                    update.Parameters.AddWithValue("@stageId", existing.Id);
+                    await update.ExecuteNonQueryAsync(cancellationToken);
+                }
+                else
+                {
+                    var stageId = existingStages.Count == 0 ? 1 : existingStages.Max(candidate => candidate.Id) + 1;
+                    existingStages.Add((stageId, trimmedCode, trimmedDescription, null, ProjectStageStatus.Open, stage.Order, stage.AcceptanceCriteria, stage.ValidatorCredentialId));
+                    matchedStageIds.Add(stageId);
+                    await using var insert = connection.CreateCommand();
+                    insert.Transaction = sqlTransaction;
+                    insert.CommandText =
+                        "INSERT INTO dbo.ProProyectoEtapa (idTenant, IdProyecto, IdEXEC, IdEtapa, nOrden, sDescripcion, nPorcEtapa, nEstado, " +
+                        "dFechaAprobacion, nHumanoAprobador, sCodigo, sCriteriosAceptacion, IdCredentialValidador) " +
+                        "VALUES (@tenantId, @projectId, @execId, @stageId, @order, @description, NULL, @open, NULL, NULL, @code, @criteria, @validatorId);";
+                    AddRoadmapStageParameters(insert, request.TenantId, projectId.Value, exec.ExecId, stage, trimmedCode, trimmedDescription);
+                    insert.Parameters.AddWithValue("@stageId", stageId);
+                    insert.Parameters.Add("@open", SqlDbType.TinyInt).Value = (byte)ProjectStageStatus.Open;
+                    await insert.ExecuteNonQueryAsync(cancellationToken);
+                }
+            }
+
+            if (existingStages.Any(stage => !matchedStageIds.Contains(stage.Id)))
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return new UpdateProjectRoadmapResult(
+                    UpdateProjectRoadmapStatus.PlanLocked,
+                    ["El plan debe incluir todas las etapas ya registradas; no se permite eliminarlas del Roadmap."]);
+            }
+
+            await using (var updateExec = connection.CreateCommand())
+            {
+                updateExec.Transaction = sqlTransaction;
+                updateExec.CommandText = "UPDATE dbo.ProProyectoEXEC SET nTotalEtapas = @total WHERE idTenant = @tenantId AND IdProyecto = @projectId AND IdEXEC = @execId;";
+                updateExec.Parameters.AddWithValue("@total", request.Stages.Count);
+                updateExec.Parameters.AddWithValue("@tenantId", request.TenantId);
+                updateExec.Parameters.AddWithValue("@projectId", projectId.Value);
+                updateExec.Parameters.AddWithValue("@execId", exec.ExecId);
+                await updateExec.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            int revision;
+            await using (var revisionCommand = connection.CreateCommand())
+            {
+                revisionCommand.Transaction = sqlTransaction;
+                revisionCommand.CommandText = "SELECT ISNULL(MAX(nRevision), 0) + 1 FROM dbo.ProProyectoRoadmapRevision WHERE idTenant = @tenantId AND IdProyecto = @projectId AND IdEXEC = @execId;";
+                revisionCommand.Parameters.AddWithValue("@tenantId", request.TenantId);
+                revisionCommand.Parameters.AddWithValue("@projectId", projectId.Value);
+                revisionCommand.Parameters.AddWithValue("@execId", exec.ExecId);
+                revision = Convert.ToInt32(await revisionCommand.ExecuteScalarAsync(cancellationToken));
+            }
+
+            await using (var audit = connection.CreateCommand())
+            {
+                audit.Transaction = sqlTransaction;
+                audit.CommandText =
+                    "INSERT INTO dbo.ProProyectoRoadmapRevision (idTenant, IdProyecto, IdEXEC, nRevision, IdEvento, dFechaUtc, nActorId, IdCredential, sRoadmapJson) " +
+                    "VALUES (@tenantId, @projectId, @execId, @revision, @eventId, @date, @actorId, @credentialId, @roadmapJson);";
+                audit.Parameters.AddWithValue("@tenantId", request.TenantId);
+                audit.Parameters.AddWithValue("@projectId", projectId.Value);
+                audit.Parameters.AddWithValue("@execId", exec.ExecId);
+                audit.Parameters.AddWithValue("@revision", revision);
+                audit.Parameters.AddWithValue("@eventId", request.EventId);
+                audit.Parameters.AddWithValue("@date", DateTime.UtcNow);
+                audit.Parameters.AddWithValue("@actorId", actor.LinkedActorId ?? actor.CredentialId);
+                audit.Parameters.AddWithValue("@credentialId", actor.CredentialId);
+                audit.Parameters.Add("@roadmapJson", SqlDbType.NVarChar).Value = JsonSerializer.Serialize(request.Stages);
+                await audit.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return new UpdateProjectRoadmapResult(UpdateProjectRoadmapStatus.Updated);
+        }
+        finally
+        {
+            await dbContext.Database.CloseConnectionAsync();
+        }
+    }
+
+    private static async Task<bool> HasRoadmapAsync(
+        SqlConnection connection, SqlTransaction transaction, int tenantId, int projectId, int execId, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            "SELECT CASE WHEN EXISTS (SELECT 1 FROM dbo.ProProyectoRoadmapRevision WHERE idTenant = @tenantId AND IdProyecto = @projectId AND IdEXEC = @execId) THEN 1 ELSE 0 END;";
+        command.Parameters.AddWithValue("@tenantId", tenantId);
+        command.Parameters.AddWithValue("@projectId", projectId);
+        command.Parameters.AddWithValue("@execId", execId);
+        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken)) == 1;
+    }
+
+    private static void AddRoadmapStageParameters(
+        SqlCommand command, int tenantId, int projectId, int execId, ProjectRoadmapStageDefinition stage,
+        string code, string description)
+    {
+        command.Parameters.AddWithValue("@tenantId", tenantId);
+        command.Parameters.AddWithValue("@projectId", projectId);
+        command.Parameters.AddWithValue("@execId", execId);
+        command.Parameters.AddWithValue("@code", code);
+        command.Parameters.AddWithValue("@description", description);
+        command.Parameters.AddWithValue("@order", stage.Order);
+        command.Parameters.Add("@criteria", SqlDbType.NVarChar).Value = (object?)stage.AcceptanceCriteria ?? DBNull.Value;
+        command.Parameters.AddWithValue("@validatorId", stage.ValidatorCredentialId);
+    }
+
+    private static async Task AcquireRoadmapLockAsync(
+        SqlConnection connection, SqlTransaction transaction, int tenantId, int projectId, int execId, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            "EXEC @result = sp_getapplock @Resource = @resource, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 10000;";
+        command.Parameters.AddWithValue("@resource", $"ProProyectoRoadmap:{tenantId}:{projectId}:{execId}");
+        var result = command.Parameters.Add("@result", SqlDbType.Int);
+        result.Direction = ParameterDirection.Output;
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        if ((int)result.Value < 0)
+        {
+            throw new InvalidOperationException("No se pudo adquirir el lock del Roadmap.");
         }
     }
 
@@ -557,7 +942,7 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
     /// <summary>
     /// Estado de la cadena de eventos para UN workstream (null incluido - "todo el proyecto").
     /// Cada workstream tiene su propia continuidad de EXEC/etapa/control/lease, independiente
-    /// de cualquier otro workstream del mismo proyecto. Ver AURA_PROTOCOL v2.1.
+    /// de cualquier otro workstream del mismo proyecto. Ver AURA_PROTOCOL v2.2.
     /// </summary>
     private sealed record ChainState(
         long? ItemId, int? ExecId, int? StageId, long? ControlItemId,
@@ -902,7 +1287,15 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
 
     // ---- Etapa ----
 
-    private sealed record StageRow(int StageId, string Description, decimal? Progress, ProjectStageStatus Status);
+    private sealed record StageRow(
+        int StageId,
+        string Description,
+        decimal? Progress,
+        ProjectStageStatus Status,
+        string? StageCode,
+        string? AcceptanceCriteria,
+        int? ValidatorCredentialId,
+        int? LastCoderCredentialId);
 
     private static async Task<StageRow?> FindStageByDescriptionAsync(
         SqlConnection connection, SqlTransaction transaction, int tenantId, int projectId, int execId, string description, CancellationToken cancellationToken)
@@ -910,23 +1303,38 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText =
-            "SELECT TOP (1) IdEtapa, sDescripcion, nPorcEtapa, nEstado FROM dbo.ProProyectoEtapa " +
-            "WHERE idTenant = @tenantId AND IdProyecto = @projectId AND IdEXEC = @execId AND LOWER(sDescripcion) = LOWER(@description);";
+            "SELECT TOP (1) s.IdEtapa, s.sDescripcion, s.nPorcEtapa, s.nEstado, s.sCodigo, s.sCriteriosAceptacion, s.IdCredentialValidador, " +
+            "(SELECT TOP (1) i.IdCredential FROM dbo.ProProyectosItems i WHERE i.idTenant = s.idTenant AND i.IdProyecto = s.IdProyecto " +
+            "AND i.IdEXEC = s.IdEXEC AND i.IdEtapa = s.IdEtapa AND i.nActorTipo = @coderActor AND i.nPorcEtapa = 100 ORDER BY i.IdItems DESC) " +
+            "FROM dbo.ProProyectoEtapa s WHERE s.idTenant = @tenantId AND s.IdProyecto = @projectId AND s.IdEXEC = @execId AND LOWER(s.sDescripcion) = LOWER(@description);";
         command.Parameters.AddWithValue("@tenantId", tenantId);
         command.Parameters.AddWithValue("@projectId", projectId);
         command.Parameters.AddWithValue("@execId", execId);
         command.Parameters.AddWithValue("@description", description);
+        command.Parameters.Add("@coderActor", SqlDbType.TinyInt).Value = (byte)ProjectActorType.Coder;
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
-        {
-            return null;
-        }
+        return await reader.ReadAsync(cancellationToken) ? MapStageRow(reader) : null;
+    }
 
-        return new StageRow(
-            reader.GetInt32(0), reader.GetString(1),
-            reader.IsDBNull(2) ? null : reader.GetDecimal(2),
-            (ProjectStageStatus)reader.GetByte(3));
+    private static async Task<StageRow?> FindStageByCodeAsync(
+        SqlConnection connection, SqlTransaction transaction, int tenantId, int projectId, int execId, string stageCode, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            "SELECT TOP (1) s.IdEtapa, s.sDescripcion, s.nPorcEtapa, s.nEstado, s.sCodigo, s.sCriteriosAceptacion, s.IdCredentialValidador, " +
+            "(SELECT TOP (1) i.IdCredential FROM dbo.ProProyectosItems i WHERE i.idTenant = s.idTenant AND i.IdProyecto = s.IdProyecto " +
+            "AND i.IdEXEC = s.IdEXEC AND i.IdEtapa = s.IdEtapa AND i.nActorTipo = @coderActor AND i.nPorcEtapa = 100 ORDER BY i.IdItems DESC) " +
+            "FROM dbo.ProProyectoEtapa s WHERE s.idTenant = @tenantId AND s.IdProyecto = @projectId AND s.IdEXEC = @execId AND UPPER(s.sCodigo) = UPPER(@stageCode);";
+        command.Parameters.AddWithValue("@tenantId", tenantId);
+        command.Parameters.AddWithValue("@projectId", projectId);
+        command.Parameters.AddWithValue("@execId", execId);
+        command.Parameters.AddWithValue("@stageCode", stageCode);
+        command.Parameters.Add("@coderActor", SqlDbType.TinyInt).Value = (byte)ProjectActorType.Coder;
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? MapStageRow(reader) : null;
     }
 
     private static async Task<StageRow?> GetStageByIdAsync(
@@ -935,29 +1343,39 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText =
-            "SELECT IdEtapa, sDescripcion, nPorcEtapa, nEstado FROM dbo.ProProyectoEtapa " +
-            "WHERE idTenant = @tenantId AND IdProyecto = @projectId AND IdEXEC = @execId AND IdEtapa = @stageId;";
+            "SELECT s.IdEtapa, s.sDescripcion, s.nPorcEtapa, s.nEstado, s.sCodigo, s.sCriteriosAceptacion, s.IdCredentialValidador, " +
+            "(SELECT TOP (1) i.IdCredential FROM dbo.ProProyectosItems i WHERE i.idTenant = s.idTenant AND i.IdProyecto = s.IdProyecto " +
+            "AND i.IdEXEC = s.IdEXEC AND i.IdEtapa = s.IdEtapa AND i.nActorTipo = @coderActor AND i.nPorcEtapa = 100 ORDER BY i.IdItems DESC) " +
+            "FROM dbo.ProProyectoEtapa s WHERE s.idTenant = @tenantId AND s.IdProyecto = @projectId AND s.IdEXEC = @execId AND s.IdEtapa = @stageId;";
         command.Parameters.AddWithValue("@tenantId", tenantId);
         command.Parameters.AddWithValue("@projectId", projectId);
         command.Parameters.AddWithValue("@execId", execId);
         command.Parameters.AddWithValue("@stageId", stageId);
+        command.Parameters.Add("@coderActor", SqlDbType.TinyInt).Value = (byte)ProjectActorType.Coder;
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
-        {
-            return null;
-        }
-
-        return new StageRow(
-            reader.GetInt32(0), reader.GetString(1),
-            reader.IsDBNull(2) ? null : reader.GetDecimal(2),
-            (ProjectStageStatus)reader.GetByte(3));
+        return await reader.ReadAsync(cancellationToken) ? MapStageRow(reader) : null;
     }
+
+    private static StageRow MapStageRow(SqlDataReader reader) => new(
+        reader.GetInt32(0),
+        reader.GetString(1),
+        reader.IsDBNull(2) ? null : reader.GetDecimal(2),
+        (ProjectStageStatus)reader.GetByte(3),
+        reader.IsDBNull(4) ? null : reader.GetString(4),
+        reader.IsDBNull(5) ? null : reader.GetString(5),
+        reader.IsDBNull(6) ? null : reader.GetInt32(6),
+        reader.IsDBNull(7) ? null : reader.GetInt32(7));
 
     private static async Task<StageRow?> ResolveOrCreateStageAsync(
         SqlConnection connection, SqlTransaction transaction, int tenantId, int projectId, int execId,
-        string? requestedStageDescription, int? inheritedStageId, CancellationToken cancellationToken)
+        string? requestedStageDescription, string? requestedStageCode, int? inheritedStageId, CancellationToken cancellationToken)
     {
+        if (!string.IsNullOrWhiteSpace(requestedStageCode))
+        {
+            return await FindStageByCodeAsync(connection, transaction, tenantId, projectId, execId, requestedStageCode.Trim(), cancellationToken);
+        }
+
         if (!string.IsNullOrWhiteSpace(requestedStageDescription))
         {
             var trimmed = requestedStageDescription.Trim();
@@ -1001,7 +1419,7 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
             insert.Parameters.Add("@status", SqlDbType.TinyInt).Value = (byte)ProjectStageStatus.Open;
             await insert.ExecuteNonQueryAsync(cancellationToken);
 
-            return new StageRow(nextStageId, trimmed, null, ProjectStageStatus.Open);
+            return new StageRow(nextStageId, trimmed, null, ProjectStageStatus.Open, null, null, null, null);
         }
 
         if (inheritedStageId is not null)
@@ -1037,11 +1455,12 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText =
-            "SELECT COUNT(*) FROM dbo.ProProyectoEtapa WHERE idTenant = @tenantId AND IdProyecto = @projectId AND IdEXEC = @execId AND nEstado = @approved;";
+            "SELECT COUNT(*) FROM dbo.ProProyectoEtapa WHERE idTenant = @tenantId AND IdProyecto = @projectId AND IdEXEC = @execId AND nEstado IN (@approved, @approvedWithWarnings);";
         command.Parameters.AddWithValue("@tenantId", tenantId);
         command.Parameters.AddWithValue("@projectId", projectId);
         command.Parameters.AddWithValue("@execId", execId);
         command.Parameters.Add("@approved", SqlDbType.TinyInt).Value = (byte)ProjectStageStatus.Approved;
+        command.Parameters.Add("@approvedWithWarnings", SqlDbType.TinyInt).Value = (byte)ProjectStageStatus.ApprovedWithWarnings;
 
         var result = await command.ExecuteScalarAsync(cancellationToken);
         return Convert.ToInt32(result);
@@ -1064,19 +1483,46 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
                     return "No se pudo identificar la etapa a aprobar.";
                 }
 
+                if (stage.Status != ProjectStageStatus.Open)
+                {
+                    return "La etapa ya está cerrada; debe reabrirse con REWORK antes de una nueva aprobación.";
+                }
+
                 if (stage.Progress != 100m)
                 {
                     return "La etapa debe estar al 100% de avance tecnico antes de aprobarla.";
                 }
 
+                var roadmapApproval = stage.StageCode is not null;
+                if (roadmapApproval && stage.ValidatorCredentialId != command.CredentialId)
+                {
+                    return "Solo la credencial AI_ANALYST designada para esta etapa puede aprobarla.";
+                }
+
+                if (roadmapApproval && stage.LastCoderCredentialId == command.CredentialId)
+                {
+                    return "La credencial que completó el avance técnico no puede aprobar su propio trabajo.";
+                }
+
+                if (roadmapApproval && command.StageOutcome is not ("PASS" or "PASS_WITH_WARNINGS"))
+                {
+                    return "stageOutcome debe ser PASS o PASS_WITH_WARNINGS para aprobar una etapa de Roadmap.";
+                }
+
+                var approvedStatus = command.StageOutcome == "PASS_WITH_WARNINGS"
+                    ? ProjectStageStatus.ApprovedWithWarnings
+                    : ProjectStageStatus.Approved;
                 await using var update = connection.CreateCommand();
                 update.Transaction = transaction;
                 update.CommandText =
-                    "UPDATE dbo.ProProyectoEtapa SET nEstado = @approved, dFechaAprobacion = @now, nHumanoAprobador = @humanId " +
+                    "UPDATE dbo.ProProyectoEtapa SET nEstado = @approved, dFechaAprobacion = @now, " +
+                    "nHumanoAprobador = @humanId, nActorTipoAprobador = @actorType, IdCredentialAprobador = @credentialId " +
                     "WHERE idTenant = @tenantId AND IdProyecto = @projectId AND IdEXEC = @execId AND IdEtapa = @stageId;";
-                update.Parameters.Add("@approved", SqlDbType.TinyInt).Value = (byte)ProjectStageStatus.Approved;
+                update.Parameters.Add("@approved", SqlDbType.TinyInt).Value = (byte)approvedStatus;
                 update.Parameters.AddWithValue("@now", DateTime.UtcNow);
-                update.Parameters.Add("@humanId", SqlDbType.Int).Value = (object?)command.ActorId ?? DBNull.Value;
+                update.Parameters.Add("@humanId", SqlDbType.Int).Value = command.ActorType == ProjectActorType.Human ? (object?)command.ActorId ?? DBNull.Value : DBNull.Value;
+                update.Parameters.Add("@actorType", SqlDbType.TinyInt).Value = (byte)command.ActorType;
+                update.Parameters.Add("@credentialId", SqlDbType.Int).Value = (object?)command.CredentialId ?? DBNull.Value;
                 update.Parameters.AddWithValue("@tenantId", tenantId);
                 update.Parameters.AddWithValue("@projectId", projectId);
                 update.Parameters.AddWithValue("@execId", exec.ExecId);
@@ -1095,7 +1541,8 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
                 await using var update = connection.CreateCommand();
                 update.Transaction = transaction;
                 update.CommandText =
-                    "UPDATE dbo.ProProyectoEtapa SET nEstado = @open, dFechaAprobacion = NULL, nHumanoAprobador = NULL " +
+                    "UPDATE dbo.ProProyectoEtapa SET nEstado = @open, nPorcEtapa = 0, dFechaAprobacion = NULL, nHumanoAprobador = NULL, " +
+                    "nActorTipoAprobador = NULL, IdCredentialAprobador = NULL " +
                     "WHERE idTenant = @tenantId AND IdProyecto = @projectId AND IdEXEC = @execId AND IdEtapa = @stageId;";
                 update.Parameters.Add("@open", SqlDbType.TinyInt).Value = (byte)ProjectStageStatus.Open;
                 update.Parameters.AddWithValue("@tenantId", tenantId);
@@ -1202,12 +1649,12 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
                 (idTenant, IdProyecto, IdItems, dFechaEntrada, nCodificador, nAnalista, nHumano, sDescripcion, OrdenInput,
                  IdEvento, IdItemAnterior, nTipoEvento, nActorTipo, sAgente, sEntorno, nEstadoTrabajo, nControlTipo, nControlId, IdControlItem,
                  sResumen, sProximaAccion, sBloqueo, sReferencia, sModelo, IdEXEC, IdEtapa, sEtapa, nPorcEtapa, nTotalEtapas, nPorcEXEC,
-                 sWorkStream, LeaseId, LeaseVersion, LeaseExpiresAtUtc, IdCredential)
+                 sWorkStream, LeaseId, LeaseVersion, LeaseExpiresAtUtc, IdCredential, sCodigoEtapa, sResultadoEtapa)
             VALUES
                 (@tenantId, @projectId, @itemId, @now, @coder, @analyst, @human, @details, NULL,
                  @eventId, @previousItemId, @eventType, @actorType, @agent, @environment, @status, @controlType, @controlId, @controlItemId,
                  @summary, @nextAction, @blocker, @reference, @model, @execId, @stageId, @stageDescription, @stageProgress, @totalStages, @execProgress,
-                 @workStream, @leaseId, @leaseVersion, @leaseExpiresAtUtc, @credentialId);
+                 @workStream, @leaseId, @leaseVersion, @leaseExpiresAtUtc, @credentialId, @stageCode, @stageOutcome);
             """;
 
         var parameters = insertCommand.Parameters;
@@ -1256,6 +1703,8 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
         parameters.Add("@leaseVersion", SqlDbType.BigInt).Value = (object?)newLease?.Version ?? DBNull.Value;
         parameters.Add("@leaseExpiresAtUtc", SqlDbType.DateTime2).Value = (object?)newLease?.ExpiresAtUtc ?? DBNull.Value;
         parameters.Add("@credentialId", SqlDbType.Int).Value = (object?)command.CredentialId ?? DBNull.Value;
+        parameters.Add("@stageCode", SqlDbType.VarChar).Value = (object?)stage?.StageCode ?? DBNull.Value;
+        parameters.Add("@stageOutcome", SqlDbType.VarChar).Value = (object?)command.StageOutcome ?? DBNull.Value;
 
         await insertCommand.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -1388,8 +1837,8 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
 
         var totalStages = ReadNullableInt32(reader, "ExecTotalStages");
         var closedStages = reader.GetInt32(reader.GetOrdinal("ClosedCount"));
-        // nPorcEXEC ya es una fotografia calculada y grabada en la escritura - se lee tal cual.
         var execProgress = ReadNullableDecimal(reader, "nPorcEXEC");
+        var workStream = ReadNullableString(reader, "sWorkStream");
 
         return new ProjectControlProjectDto(
             projectId,
@@ -1423,7 +1872,8 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
             summary,
             nextAction,
             blocker,
-            reference);
+            reference,
+            workStream);
     }
 
     private static string ResolveActorName(

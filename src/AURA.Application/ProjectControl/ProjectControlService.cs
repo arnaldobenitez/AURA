@@ -11,6 +11,7 @@ public sealed class ProjectControlService(IProjectControlRepository repository, 
     private const int StageMaxLength = 100;
     private const int EnvironmentMaxLength = 100;
     private const int ProjectCodeMaxLength = 50;
+    private const int StageCodeMaxLength = 50;
     private const int ProjectNameMaxLength = 100;
     private const int DescriptionMaxLength = 500;
     private const int RepositoryMaxLength = 2000;
@@ -23,6 +24,98 @@ public sealed class ProjectControlService(IProjectControlRepository repository, 
     public Task<ProjectHistoryDto?> GetHistoryAsync(int tenantId, string projectCode, CancellationToken cancellationToken)
     {
         return repository.GetHistoryAsync(tenantId, projectCode.Trim(), cancellationToken);
+    }
+
+    public Task<ProjectRoadmapDto?> GetRoadmapAsync(int tenantId, string projectCode, string? workStream, CancellationToken cancellationToken)
+    {
+        return repository.GetRoadmapAsync(tenantId, projectCode.Trim(), NullIfWhiteSpace(workStream), cancellationToken);
+    }
+
+    public async Task<UpdateProjectRoadmapResult> UpdateRoadmapAsync(
+        string projectCode,
+        UpdateProjectRoadmapRequest request,
+        AuthenticatedActor authenticatedActor,
+        CancellationToken cancellationToken)
+    {
+        request = request with { WorkStream = NullIfWhiteSpace(request.WorkStream) };
+        if (authenticatedActor.ActorType != ProjectActorType.Human || authenticatedActor.TenantId != request.TenantId)
+        {
+            return new UpdateProjectRoadmapResult(UpdateProjectRoadmapStatus.Forbidden);
+        }
+
+        var errors = ValidateRoadmap(request);
+        if (errors.Count > 0)
+        {
+            return new UpdateProjectRoadmapResult(UpdateProjectRoadmapStatus.InvalidPlan, errors);
+        }
+
+        return await repository.UpdateRoadmapAsync(projectCode.Trim(), request, authenticatedActor, cancellationToken);
+    }
+
+    private static List<string> ValidateRoadmap(UpdateProjectRoadmapRequest request)
+    {
+        var errors = new List<string>();
+        if (request.TenantId <= 0)
+        {
+            errors.Add("tenantId debe ser mayor a cero.");
+        }
+
+        if (request.EventId == Guid.Empty)
+        {
+            errors.Add("eventId debe ser un GUID válido.");
+        }
+
+        if (request.Stages is null || request.Stages.Count == 0 || request.Stages.Count > 200)
+        {
+            errors.Add("El Roadmap debe contener entre 1 y 200 etapas.");
+            return errors;
+        }
+
+        if (request.WorkStream is { Length: > StageMaxLength })
+        {
+            errors.Add($"workStream no puede superar {StageMaxLength} caracteres.");
+        }
+
+        var codes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var orders = new HashSet<int>();
+        foreach (var stage in request.Stages)
+        {
+            if (string.IsNullOrWhiteSpace(stage.StageCode) || stage.StageCode.Trim().Length > StageCodeMaxLength)
+            {
+                errors.Add($"stageCode es obligatorio y no puede superar {StageCodeMaxLength} caracteres.");
+            }
+            else if (!codes.Add(stage.StageCode.Trim()))
+            {
+                errors.Add($"stageCode duplicado: {stage.StageCode}.");
+            }
+
+            if (string.IsNullOrWhiteSpace(stage.Description) || stage.Description.Trim().Length > StageMaxLength)
+            {
+                errors.Add($"La descripción de cada etapa es obligatoria y no puede superar {StageMaxLength} caracteres.");
+            }
+
+            if (stage.Order <= 0 || !orders.Add(stage.Order))
+            {
+                errors.Add("El orden de las etapas debe ser único y mayor a cero.");
+            }
+
+            if (stage.AcceptanceCriteria is { Length: > 1000 })
+            {
+                errors.Add("Los criterios de aceptación no pueden superar 1000 caracteres.");
+            }
+
+            if (stage.ValidatorCredentialId <= 0)
+            {
+                errors.Add("Cada etapa debe tener un validatorCredentialId AI_ANALYST válido.");
+            }
+        }
+
+        if (orders.Count == request.Stages.Count && !orders.Order().SequenceEqual(Enumerable.Range(1, orders.Count)))
+        {
+            errors.Add("El orden de las etapas debe ser consecutivo desde 1.");
+        }
+
+        return errors;
     }
 
     public async Task<RegisterProjectEventResult> RegisterEventAsync(
@@ -39,7 +132,7 @@ public sealed class ProjectControlService(IProjectControlRepository repository, 
 
         // Identity is authenticated, not asserted: reject anything the caller's own credential
         // does not back up, rather than trusting actor.type/actor.id from the body. See
-        // AURA_PROTOCOL v2.1 "HUMAN vs ANALYST" and "No confiar en AgentId enviado libremente".
+        // AURA_PROTOCOL v2.2 authenticated identity and designated Roadmap approver rules.
         var forbiddenReason = CheckAuthorization(request, actorType, authenticatedActor);
         if (forbiddenReason is not null)
         {
@@ -72,7 +165,9 @@ public sealed class ProjectControlService(IProjectControlRepository repository, 
             request.LeaseId,
             request.ExpectedLeaseVersion,
             authenticatedActor.CredentialId,
-            leaseOptions.Duration);
+            leaseOptions.Duration,
+            NullIfWhiteSpace(request.StageCode),
+            NullIfWhiteSpace(request.StageOutcome)?.ToUpperInvariant());
 
         var outcome = await repository.RegisterEventAsync(command, cancellationToken);
 
@@ -185,6 +280,28 @@ public sealed class ProjectControlService(IProjectControlRepository repository, 
             errors.Add($"stage no puede superar {StageMaxLength} caracteres.");
         }
 
+        if (request.StageCode is { } stageCode && stageCode.Trim().Length > StageCodeMaxLength)
+        {
+            errors.Add($"stageCode no puede superar {StageCodeMaxLength} caracteres.");
+        }
+
+        if (request.StageOutcome is { } stageOutcome
+            && stageOutcome.Trim().ToUpperInvariant() is not ("PASS" or "PASS_WITH_WARNINGS"))
+        {
+            errors.Add("stageOutcome debe ser PASS o PASS_WITH_WARNINGS.");
+        }
+
+        var isApprovalEvent = string.Equals(request.EventType?.Trim(), "APPROVAL", StringComparison.OrdinalIgnoreCase);
+        if (isApprovalEvent && request.StageCode is not null && request.StageOutcome is null)
+        {
+            errors.Add("stageOutcome es obligatorio al aprobar una etapa de Roadmap.");
+        }
+
+        if (request.StageOutcome is not null && !isApprovalEvent)
+        {
+            errors.Add("stageOutcome solo se admite en eventos APPROVAL.");
+        }
+
         if (request.Environment is { } environment && environment.Trim().Length > EnvironmentMaxLength)
         {
             errors.Add($"environment no puede superar {EnvironmentMaxLength} caracteres.");
@@ -217,10 +334,20 @@ public sealed class ProjectControlService(IProjectControlRepository repository, 
             errors.Add("actor.id es obligatorio cuando actor.type no es UNASSIGNED.");
         }
 
-        if ((eventType == ProjectEventType.Approval || eventType == ProjectEventType.Request)
-            && actorType != ProjectActorType.Human)
+        if (eventType == ProjectEventType.Request && actorType != ProjectActorType.Human)
         {
             errors.Add($"eventType '{request.EventType}' solo puede registrarlo un actor HUMAN.");
+        }
+
+        if (eventType == ProjectEventType.Approval)
+        {
+            var requiredActor = request.StageCode is null ? ProjectActorType.Human : ProjectActorType.AiAnalyst;
+            if (actorType != requiredActor)
+            {
+                errors.Add(request.StageCode is null
+                    ? "APPROVAL de etapa legacy requiere actor HUMAN."
+                    : "APPROVAL de una etapa de Roadmap requiere actor AI_ANALYST designado.");
+            }
         }
 
         if (request.Agent is { } agent && agent.Trim().Length > EnvironmentMaxLength)

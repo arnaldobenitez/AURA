@@ -43,7 +43,7 @@ public class ContractDocumentsDoNotContradictTests
         var rules = TestFile("rules/AURA.md");
 
         Assert.Contains("LEGACY_COMPATIBILITY_POINTER", rules);
-        Assert.Contains("AURA_PROTOCOL_v2.1.md", rules);
+        Assert.Contains("AURA_PROTOCOL_v2.2.md", rules);
         Assert.Contains("AURA_PROJECT_MEMORY_v1.0.md", rules);
         Assert.Contains("AURA_AGENT_CONTRACT_v1.0.md", rules);
         Assert.Contains("no prevalece", rules);

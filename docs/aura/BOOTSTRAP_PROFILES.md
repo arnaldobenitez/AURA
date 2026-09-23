@@ -1,11 +1,11 @@
-# AURA Bootstrap Profiles (v2.1)
+# AURA Bootstrap Profiles (v2.2)
 
 ```text
 STATUS: DESIGNED — NOT YET DISTRIBUTED
 ```
 
 These three profiles are the only thing a repository or an agent's own instructions should ever
-receive — never the full text of `AURA_PROTOCOL_v2.1.md`. Per `AURA-PROTOCOL-V2-00` §24/§34 and
+receive — never the full text of `AURA_PROTOCOL_v2.2.md`. Per `AURA-PROTOCOL-V2-00` §24/§34 and
 `AURA-PROTOCOL-V2-01` (which keeps this the same, explicitly: "NO distribuir bootstraps
 todavía"), they are designed here for review but must **not** be pasted into any live agent
 memory, `CLAUDE.md`, ChatGPT custom instructions, Windsurf/Devin configuration, or any consumer
@@ -36,19 +36,33 @@ This rule applies equally to `ANALYST`, `CODING_AGENT`, `AUTONOMOUS_AGENT`, and 
 
 ```text
 PROTOCOL: AURA_PROTOCOL (ask GET /api/aura-protocol for the current version — do not hardcode a number)
-ROLE: ANALYST
+ROLE: HUMAN ANALYST / ROADMAP ADMINISTRATOR
 CREDENTIAL: your own AgentCredential (actorType=HUMAN), provisioned once by an admin. Never share it.
 ON START: POST /api/auth/token with your credentialId+secret -> Bearer token.
           GET /api/aura-protocol, then read the document it names before acting.
-WRITE SCOPE: You may REQUEST (open EXEC) and APPROVE (close stage) — your credential's
-             authenticated actorType must be HUMAN for these two (now enforced, not just
-             declared); an AI acting as analyst can do everything else an ANALYST does
-             (PROGRESS, HANDOFF, REVIEW via summary) but cannot itself REQUEST/APPROVE — hand
-             off to a human for those two actions specifically.
+WRITE SCOPE: REQUEST to open an EXEC; PUT the ordered Roadmap and assign an active AI_ANALYST
+             credential to each stage. You may approve legacy stages without a Roadmap code;
+             a planned Roadmap stage must be approved by its designated AI_ANALYST credential.
 SYNC: Before any significant task: GET the board. After any write: READ-BACK before reporting success.
 IF TOKEN EXPIRED: request a new one (POST /api/auth/token again) — no separate refresh flow.
 IF AURA UNAVAILABLE: declare AURA_SYNCHRONIZATION = PENDING, keep a local record, do not use SQL
-             directly, do not fall back to a pre-v2.1 protocol as authoritative.
+             directly, do not fall back to any superseded protocol as authoritative.
+```
+
+## AURA_BOOTSTRAP_ROADMAP_VALIDATOR_v2.2
+
+```text
+PROTOCOL: AURA_PROTOCOL (ask GET /api/aura-protocol for the current version — do not hardcode a number)
+ROLE: DESIGNATED ROADMAP VALIDATOR
+CREDENTIAL: your own AgentCredential (actorType=AI_ANALYST), assigned by a HUMAN to each stage. Never share it.
+ON START: POST /api/auth/token with your credentialId+secret -> Bearer token.
+          GET /api/aura-protocol, read its sourceDocument, then GET the board and Roadmap.
+WRITE SCOPE: Review only stages assigned to this credential. Verify acceptance criteria and
+             evidence. If complete, send APPROVAL with stageCode and stageOutcome PASS or
+             PASS_WITH_WARNINGS, summary, and reference. You cannot edit/assign the plan or
+             approve a stage completed by this same credential.
+SYNC: READ-BACK the Roadmap after every approval before reporting success.
+IF AURA UNAVAILABLE: report synchronization as PENDING; never use SQL to update Roadmap.
 ```
 
 ## AURA_BOOTSTRAP_CODING_AGENT_v2
@@ -59,18 +73,17 @@ ROLE: CODING_AGENT
 CREDENTIAL: your own AgentCredential (actorType=CODER), provisioned once by an admin. Never share it.
 IDENTITY: agent/model/environment are free text and required for this actor type.
 ON START: POST /api/auth/token with your credentialId+secret -> Bearer token.
-          GET /api/aura-protocol, then read the document it names. GET the board for your
-          project, note LastItemId and CurrentControl.
-WRITE SCOPE: CLAIM to take control (acquires a lease), PROGRESS at real milestones only
-             (present the lease's leaseId+version each time), HANDOFF or BLOCKER to close out.
-             You cannot REQUEST a new EXEC or APPROVE a stage close (HUMAN only) — hand off
-             instead of attempting either.
+          GET /api/aura-protocol, read the document it names, then GET the board and Roadmap.
+          Use the planned stageCode and acceptance criteria; note LastItemId and CurrentControl.
+WRITE SCOPE: CLAIM to take control; PROGRESS verified stageProgress with stageCode and the
+             latest lease; HANDOFF or BLOCKER to close out. Never send formal APPROVAL — hand
+             the stage to its designated AI_ANALYST when it reaches 100%.
 CONCURRENCY: a second CLAIM by a different credential on the same (project, workStream) fails
              with 409 LEASE_CONFLICT — that's correct, not a bug; re-check who holds it.
 SYNC: READ-BACK after every write before telling anyone it succeeded.
 IF TOKEN EXPIRED: request a new one (POST /api/auth/token again).
 IF AURA UNAVAILABLE: declare AURA_SYNCHRONIZATION = PENDING, keep a local record, do not use SQL
-             directly, do not fall back to a pre-v2.1 protocol as authoritative.
+             directly, do not fall back to any superseded protocol as authoritative.
 ```
 
 ## AURA_BOOTSTRAP_AUTONOMOUS_AGENT_v2
@@ -101,6 +114,6 @@ SYNC / UNAVAILABILITY / TOKEN EXPIRY: identical to CODING_AGENT.
       `ConnectionStrings:DefaultConnection` already is (hand-edited into the deployed
       `appsettings.json` on OMEN) — never committed, never in a bootstrap.
 - [ ] Each profile above copied into exactly the small bootstrap location the Analyst chooses
-      per agent/environment (never the full `AURA_PROTOCOL_v2.1.md`).
+      per agent/environment (never the full `AURA_PROTOCOL_v2.2.md`).
 - [ ] No consumer project's own data (SiniTrax, TurnoMedix, Arterio, ...) touched as part of
       this step — reconciling any of them stays a separate, explicitly authorized task.

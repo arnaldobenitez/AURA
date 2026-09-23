@@ -1,3 +1,4 @@
+using AURA.Application.AgentCredential;
 using AURA.Domain.ProjectControl;
 
 namespace AURA.Application.ProjectControl;
@@ -9,7 +10,7 @@ public enum ProjectEventOutcomeStatus
     ProjectNotFound,
     Conflict,
     InvalidTransition,
-    // AURA_PROTOCOL v2.1 lease/concurrency outcomes - see docs/aura/AURA_PROTOCOL_v2.1.md.
+    // AURA_PROTOCOL v2.1 lease/concurrency outcomes, extended by v2.2 Roadmap approvals - see docs/aura/AURA_PROTOCOL_v2.2.md.
     LeaseConflict,
     LeaseExpired,
 }
@@ -62,7 +63,9 @@ public sealed record ProjectEventCommand(
     // Lease duration for a CLAIM/REQUEST that (re)acquires the lease; the repository applies a
     // configured default when null. Kept on the command so the service layer (which reads
     // configuration) controls it rather than the repository hardcoding a value.
-    TimeSpan? LeaseDuration = null);
+    TimeSpan? LeaseDuration = null,
+    string? StageCode = null,
+    string? StageOutcome = null);
 
 public enum CreateProjectOutcomeStatus
 {
@@ -90,6 +93,10 @@ public interface IProjectControlRepository
     Task<ProjectEventOutcome> RegisterEventAsync(ProjectEventCommand command, CancellationToken cancellationToken);
 
     Task<CreateProjectOutcome> CreateProjectAsync(CreateProjectCommand command, CancellationToken cancellationToken);
+
+    Task<ProjectRoadmapDto?> GetRoadmapAsync(int tenantId, string projectCode, string? workStream, CancellationToken cancellationToken);
+
+    Task<UpdateProjectRoadmapResult> UpdateRoadmapAsync(string projectCode, UpdateProjectRoadmapRequest request, AuthenticatedActor actor, CancellationToken cancellationToken);
 
     Task<ProjectHistoryDto?> GetHistoryAsync(int tenantId, string projectCode, CancellationToken cancellationToken);
 }

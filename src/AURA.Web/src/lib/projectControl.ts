@@ -48,6 +48,7 @@ export interface ProjectControlProject {
   nextAction: string | null;
   blocker: string | null;
   reference: string | null;
+  workStream: string | null;
 }
 
 export interface ProjectControlBoard {
@@ -85,6 +86,38 @@ export interface ProjectHistory {
   projectCode: string | null;
   projectName: string;
   interventions: ProjectIntervention[];
+}
+
+export type RoadmapStageStatus = "PENDING" | "IN_PROGRESS" | "PENDING_REVIEW" | "PASS" | "PASS_WITH_WARNINGS";
+
+export interface ProjectRoadmapStage {
+  stageId: number;
+  stageCode: string | null;
+  order: number;
+  description: string;
+  acceptanceCriteria: string | null;
+  progress: number | null;
+  status: RoadmapStageStatus;
+  validatorCredentialId: number | null;
+  validatorName: string | null;
+  approvalOutcome: string | null;
+  approvedAtUtc: string | null;
+  approverAgent: string | null;
+  approverModel: string | null;
+  approvalSummary: string | null;
+  evidenceReference: string | null;
+}
+
+export interface ProjectRoadmap {
+  projectId: number;
+  projectCode: string;
+  projectName: string;
+  execId: number | null;
+  workStream: string | null;
+  totalStages: number;
+  closedStages: number;
+  execProgress: number | null;
+  stages: ProjectRoadmapStage[];
 }
 
 export interface CreateProjectRequest {
@@ -159,6 +192,28 @@ export async function fetchProjectHistory(
   }
 
   return (await response.json()) as ProjectHistory;
+}
+
+export async function fetchProjectRoadmap(
+  tenantId: number,
+  projectCode: string,
+  workStream?: string | null,
+  signal?: AbortSignal,
+): Promise<ProjectRoadmap> {
+  const query = new URLSearchParams({ tenantId: String(tenantId) });
+  if (workStream) {
+    query.set("workStream", workStream);
+  }
+  const response = await authFetch(
+    `${apiBaseUrl}/api/project-control/projects/${encodeURIComponent(projectCode)}/roadmap?${query}`,
+    { signal },
+  );
+
+  if (!response.ok) {
+    throw new Error(`No se pudo obtener el Roadmap del proyecto (HTTP ${response.status}).`);
+  }
+
+  return (await response.json()) as ProjectRoadmap;
 }
 
 export async function createProject(

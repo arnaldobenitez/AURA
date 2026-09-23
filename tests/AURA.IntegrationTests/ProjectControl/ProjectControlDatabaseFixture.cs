@@ -28,6 +28,7 @@ public sealed class ProjectControlDatabaseFixture : IAsyncLifetime
 
     private string? _connectionString;
     private readonly Dictionary<(int TenantId, string ActorType), string> _tokens = new();
+    private readonly Dictionary<(int TenantId, string ActorType), int> _credentialIds = new();
     private HttpClient _bootstrapClient = null!;
 
     public WebApplicationFactory<global::Program> Factory { get; private set; } = null!;
@@ -87,6 +88,7 @@ public sealed class ProjectControlDatabaseFixture : IAsyncLifetime
         foreach (var actorType in new[] { "CODER", "AI_ANALYST", "HUMAN" })
         {
             var (credentialId, secret) = await CreateCredentialAsync(tenantId, actorType, $"test-{actorType}");
+            _credentialIds[(tenantId, actorType)] = credentialId;
             _tokens[(tenantId, actorType)] = await MintTokenAsync(tenantId, credentialId, secret);
         }
     }
@@ -128,6 +130,8 @@ public sealed class ProjectControlDatabaseFixture : IAsyncLifetime
 
     /// <summary>Bearer token for a shared, pre-provisioned credential of the given role/tenant.</summary>
     public string GetBearerToken(int tenantId, string actorType) => _tokens[(tenantId, actorType)];
+
+    public int GetCredentialId(int tenantId, string actorType) => _credentialIds[(tenantId, actorType)];
 
     public void AddBearer(HttpRequestMessage request, int tenantId, string actorType) =>
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", GetBearerToken(tenantId, actorType));
@@ -204,6 +208,7 @@ public sealed class ProjectControlDatabaseFixture : IAsyncLifetime
         command.CommandText =
             """
             SET QUOTED_IDENTIFIER ON;
+            DELETE FROM ProProyectoRoadmapRevision WHERE idTenant IN (@t1, @t2);
             DELETE FROM ProProyectosItems WHERE idTenant IN (@t1, @t2);
             DELETE FROM ProProyectoEtapa WHERE idTenant IN (@t1, @t2);
             DELETE FROM ProProyectoEXEC WHERE idTenant IN (@t1, @t2);

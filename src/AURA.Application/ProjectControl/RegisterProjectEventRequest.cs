@@ -28,4 +28,6 @@ public sealed record RegisterProjectEventRequest(
     // Required for every mutating event except REQUEST/CLAIM, which establish the lease
     // themselves. See docs/aura/AURA_PROTOCOL_v2.1.md "Lease and optimistic concurrency".
     Guid? LeaseId = null,
-    long? ExpectedLeaseVersion = null);
+    long? ExpectedLeaseVersion = null,
+    string? StageCode = null,
+    string? StageOutcome = null);

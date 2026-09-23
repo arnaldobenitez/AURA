@@ -9,7 +9,7 @@ namespace AURA.Api.Controllers;
 
 // Login básico (2026-08-28): tanto lectura como escritura exigen ahora un JWT válido - un
 // humano debe autenticarse (POST /api/auth/login) para poder ver el tablero, no solo para
-// escribir. Ver docs/aura/AURA_PROTOCOL_v2.1.md.
+// escribir. Ver docs/aura/AURA_PROTOCOL_v2.2.md.
 [ApiController]
 [Route("api/project-control")]
 [Authorize]
@@ -77,6 +77,46 @@ public sealed class ProjectControlController(ProjectControlService projectContro
         }
 
         return Ok(history);
+    }
+
+    [HttpGet("projects/{projectCode}/roadmap")]
+    public async Task<ActionResult<ProjectRoadmapDto>> GetRoadmap(
+        string projectCode,
+        [FromQuery] int tenantId,
+        [FromQuery] string? workStream,
+        CancellationToken cancellationToken)
+    {
+        if (tenantId <= 0)
+        {
+            return Problem(
+                title: "tenantId inválido.",
+                detail: "tenantId debe ser un entero mayor a cero.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        var roadmap = await projectControlService.GetRoadmapAsync(tenantId, projectCode, workStream, cancellationToken);
+        return roadmap is null
+            ? Problem(title: "Proyecto no encontrado.", detail: "No existe un proyecto con ese tenantId y projectCode.", statusCode: StatusCodes.Status404NotFound)
+            : Ok(roadmap);
+    }
+
+    [HttpPut("projects/{projectCode}/roadmap")]
+    public async Task<IActionResult> UpdateRoadmap(
+        string projectCode,
+        [FromBody] UpdateProjectRoadmapRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await projectControlService.UpdateRoadmapAsync(projectCode, request, GetAuthenticatedActor(), cancellationToken);
+        return result.Status switch
+        {
+            UpdateProjectRoadmapStatus.Updated => Ok(new { status = "UPDATED" }),
+            UpdateProjectRoadmapStatus.ProjectNotFound => Problem(title: "Proyecto no encontrado.", statusCode: StatusCodes.Status404NotFound),
+            UpdateProjectRoadmapStatus.ExecNotFound => Problem(title: "No hay un EXEC activo para este Roadmap.", statusCode: StatusCodes.Status409Conflict),
+            UpdateProjectRoadmapStatus.Forbidden => Problem(title: "Solo una credencial HUMAN del tenant puede administrar el Roadmap.", statusCode: StatusCodes.Status403Forbidden),
+            UpdateProjectRoadmapStatus.PlanLocked => Conflict(new { status = "PLAN_LOCKED", errors = result.Errors }),
+            UpdateProjectRoadmapStatus.InvalidPlan => BadRequest(new { status = "VALIDATION_FAILED", errors = result.Errors }),
+            _ => throw new InvalidOperationException($"Unhandled roadmap update status '{result.Status}'."),
+        };
     }
 
     [HttpPost("projects")]

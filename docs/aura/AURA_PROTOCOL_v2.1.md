@@ -1,3 +1,8 @@
+```text
+STATUS: OBSOLETE
+SUPERSEDED BY: AURA_PROTOCOL v2.2 (docs/aura/AURA_PROTOCOL_v2.2.md)
+```
+
 # AURA_PROTOCOL v2.1
 
 ```text

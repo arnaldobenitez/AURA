@@ -1,5 +1,5 @@
-import { AlertTriangle, ArrowLeft, RefreshCw } from "lucide-react";
-import type { ReactNode } from "react";
+import { AlertTriangle, ArrowLeft, Map, RefreshCw } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import { ControlSummary } from "../project-control/ControlSummary";
 import { HealthIndicator } from "../project-control/HealthIndicator";
 import { InterventionSummary } from "../project-control/InterventionSummary";
@@ -8,6 +8,7 @@ import { ProgressIndicator } from "../project-control/ProgressIndicator";
 import { ProjectStatusIndicator } from "../project-control/ProjectStatusIndicator";
 import { useProjectControlBoard } from "../project-control/useProjectControlBoard";
 import { InterventionTimeline } from "./InterventionTimeline";
+import { RoadmapModal } from "./RoadmapModal";
 import { useProjectHistory } from "./useProjectHistory";
 
 const updatedFormatter = new Intl.DateTimeFormat("es-AR", { dateStyle: "medium", timeStyle: "short" });
@@ -22,6 +23,7 @@ function DetailValue({ children }: { children: ReactNode }) {
 }
 
 export function ProyectoDetalles({ projectKey, onBack }: ProyectoDetallesProps) {
+  const [isRoadmapOpen, setIsRoadmapOpen] = useState(false);
   const { board, isLoading, error, lastUpdated, refresh } = useProjectControlBoard();
   const normalizedKey = projectKey.trim().toUpperCase();
   const project = board?.projects.find(
@@ -93,6 +95,14 @@ export function ProyectoDetalles({ projectKey, onBack }: ProyectoDetallesProps) 
           </div>
         </div>
         <div className="pd-header__actions">
+          <button
+            type="button"
+            className="pd-roadmap-button"
+            onClick={() => setIsRoadmapOpen(true)}
+            disabled={!project.projectCode}
+          >
+            <Map size={15} aria-hidden="true" /> Evolución del RoadMap
+          </button>
           <HealthIndicator />
           <span>{lastUpdated ? `Actualizado ${updatedFormatter.format(lastUpdated)}` : "Sin actualizar"}</span>
           <button
@@ -225,6 +235,12 @@ export function ProyectoDetalles({ projectKey, onBack }: ProyectoDetallesProps) 
           {project.projectCode && history && <InterventionTimeline interventions={history.interventions} />}
         </section>
       </main>
+      <RoadmapModal
+        open={isRoadmapOpen}
+        projectCode={project.projectCode}
+        workStream={project.workStream}
+        onClose={() => setIsRoadmapOpen(false)}
+      />
     </div>
   );
 }

@@ -37,4 +37,5 @@ public sealed record ProjectControlProjectDto(
     string? Summary,
     string? NextAction,
     string? Blocker,
-    string? Reference);
+    string? Reference,
+    string? WorkStream);

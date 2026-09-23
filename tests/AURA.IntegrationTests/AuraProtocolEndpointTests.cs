@@ -20,11 +20,13 @@ public class AuraProtocolEndpointTests(WebApplicationFactory<Program> factory) :
         var payload = await response.Content.ReadFromJsonAsync<JsonElement>();
 
         Assert.Equal("AURA_PROTOCOL", payload.GetProperty("protocolName").GetString());
-        Assert.Equal("2.1", payload.GetProperty("version").GetString());
+        Assert.Equal("2.2", payload.GetProperty("version").GetString());
         Assert.False(string.IsNullOrWhiteSpace(payload.GetProperty("status").GetString()));
         Assert.False(string.IsNullOrWhiteSpace(payload.GetProperty("sourceDocument").GetString()));
         Assert.True(payload.GetProperty("authenticationRequired").GetBoolean());
         Assert.False(string.IsNullOrWhiteSpace(payload.GetProperty("tokenEndpoint").GetString()));
+        Assert.Equal("/api/project-control/projects/{projectCode}/roadmap", payload.GetProperty("roadmapEndpointTemplate").GetString());
+        Assert.Equal("PUT /api/project-control/projects/{projectCode}/roadmap", payload.GetProperty("roadmapPlanEndpoint").GetString());
 
         var roles = payload.GetProperty("roles").EnumerateArray().Select(r => r.GetString()).ToArray();
         Assert.Contains("ANALYST", roles);

@@ -1,16 +1,15 @@
 # Estado actual
 
 Última actualización: 2026-09-23
-Última sesión: `ca0b7d74-2ddf-41cd-8e74-74498a32010c`
-Estado general: Project Memory operativo; repositorio limpio y cerrado hasta este punto.
+Última sesión: `a9af38fa-7c6b-4bfd-b590-d72099fdd92f`
+Estado general: Project Memory operativo; AURA ProjectControl incorpora Roadmap localmente. Migración y despliegue pendientes.
 
 ## Resumen ejecutivo
 
-Post Etapa 9: los cambios acumulados de las etapas 1 a 9 fueron organizados en siete commits lógicos
-y revisables (especificación, librería runtime, Agent Contract, Project Manager, CLI/tests, adopción
-y registro de sesión). Limpieza final: `appversion.json` fue restaurado (bump local ajeno) y `.claude/`
-quedó excluido localmente vía `.git/info/exclude`. Working tree limpio. No se hizo push ni se
-reescribió historial; el push queda como decisión manual pendiente.
+Post Etapa 9, los cambios de Project Memory quedaron ordenados en commits lógicos y se completó el push
+manual previo. En esta sesión se implementó localmente Roadmap por EXEC/workstream, progreso y aprobación
+por AI_ANALYST designado, su modal compartido en la lista/detalle y AURA_PROTOCOL v2.2. La migración SQL
+aditiva no se aplicó y producción no se modificó. El working tree queda con cambios locales para revisión.
 
 ## Implementado
 
@@ -22,27 +21,30 @@ reescribió historial; el push queda como decisión manual pendiente.
 - Tests de inicialización parcial y de protección documental.
 - Saneamiento Git: siete commits lógicos (`eb84a8c`..`39e0e38`) ordenan todo el trabajo de Project Memory.
 - Limpieza final: residuos `appversion.json` y `.claude/` resueltos sin commits ajenos ni borrados.
-- Frontend `AURA.Web` (cambios sin commitear): la sesión web ya no se cierra por tiempo en el cliente —
-  solo se pide login al acceder sin sesión o si la API rechaza el token (401). El historial del detalle
-  de proyecto muestra lo más reciente primero por defecto e incorpora paginación (primera/anterior/
-  ir-a-página/siguiente/última, tamaños 10/20/30).
+- `AURA.Web`: sesión sin cierre automático por tiempo en el cliente; historial de detalle más reciente primero
+  con paginación de 10/20/30 elementos.
+- ProjectControl Roadmap local: `ProProyectoEtapa` extendida con código/criterios/validador/estado warning,
+  auditoría de revisiones del plan, progreso por etapa y aprobación formal por la credencial AI_ANALYST asignada.
+- API: lectura Roadmap y configuración del plan con credencial HUMAN; el tablero deriva avance global desde hitos
+  cerrados cuando existe Roadmap.
+- UI: el botón de la celda Etapa actual y el botón "Evolución del RoadMap" del detalle abren el mismo diálogo.
+- `AURA_PROTOCOL v2.2`, integración de agentes, perfiles de bootstrap y descubrimiento `/api/aura-protocol`
+  describen lectura de Roadmap, `stageCode`, `stageOutcome` y validación designada.
 
 ## En curso
 
-Nada dentro del alcance de Etapa 9.
+Roadmap v0.1 implementado en código y contrato localmente; sin aplicar el cambio de esquema SQL ni desplegar.
 
 ## Pendiente inmediato
 
-No hay pendientes para el cierre de Project Memory. El repositorio quedó limpio y listo para revisión;
-el push remoto es una decisión manual pendiente de Arnaldo. La instalación global de `aura` y una eventual
-UI web quedan fuera de alcance y pueden evaluarse en etapas posteriores.
+1. Revisar los cambios locales y aplicar `scripts/project-control-schema-update.ps1` únicamente en la base de desarrollo autorizada.
+2. Ejecutar las pruebas ProjectControl contra SQL Server después de la migración.
+3. Realizar despliegue y smoke test de producción cuando Arnaldo lo autorice; no se ejecutó en esta sesión.
 
 ## Bloqueos
 
-Ninguno funcional. El ejecutable global `aura` no está instalado; se dispone de `tools/aura.ps1` y del comando
-`dotnet run --project src/AURA.ProjectMemory.Cli/AURA.ProjectMemory.Cli.csproj -- ...`.
-El SDK `10.0.201` fijado por `global.json` no está instalado localmente; se validó temporalmente con `10.0.400`
-y `global.json` quedó restaurado sin cambios persistentes.
+No hubo cadena de conexión de SQL Server de test disponible en el entorno: 68 pruebas de integración quedaron omitidas
+por su gate existente. La migración es explícita y debe aplicarse antes de usar las nuevas rutas con una base.
 
 ## Problemas conocidos
 
@@ -59,16 +61,13 @@ El launcher y el smoke test son scripts locales, sin red, base de datos, depende
 
 ## Pruebas y validaciones
 
-- Build completo `AURA.sln`: correcto, 0 errores y 0 warnings.
+- `dotnet build AURA.sln --no-restore`: correcto, 0 errores y 0 warnings.
+- `AURA.UnitTests`: 11 superados, incluyendo validación de roles/planes Roadmap.
 - `AURA.ProjectMemory.Tests`: 154 superados.
-- `AURA.UnitTests`: 9 superados.
-- `AURA.IntegrationTests`: 7 superados y 66 skips preexistentes.
-- Smoke test de adopción: correcto, con índice y carpeta temporales.
-- `project validate`, `agent bootstrap`, `manager inspect`, `manager handoff` y launcher: correctos.
-- `git diff --check`: correcto.
-- Revalidación post-saneamiento: build 0 errores, 154+9 tests, validate/inspect/smoke correctos.
+- `AURA.IntegrationTests`: 7 superados, 68 omitidos por no disponer de SQL Server de test; las pruebas nuevas Roadmap requieren esa conexión.
+- `AURA.Web`: `npm run build` y `npm run lint` correctos; oxlint 0 warnings/errores.
+- `git diff --check`: correcto (solo advertencias de conversión LF/CRLF de Git).
 
 ## Próximo paso recomendado
 
-Ejecutar `agent bootstrap` y leer este documento antes de cualquier nueva tarea relevante. Para entregar continuidad,
-usar `tools/aura.ps1 manager handoff <path> --json` y abrir una nueva sesión antes del primer cambio persistente.
+Antes de probar Roadmap con SQL, aplicar el migrador explícitamente en la base de desarrollo autorizada y ejecutar las pruebas de integración nuevas. No desplegar a producción sin autorización y smoke test controlado. Para otra tarea relevante, ejecutar bootstrap y abrir una sesión antes del primer cambio persistente.

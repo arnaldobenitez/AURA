@@ -3,8 +3,8 @@
 ## 1. Single-source principle
 
 The full text of the CURRENT version of AURA_PROTOCOL lives in exactly one place:
-**`docs/aura/AURA_PROTOCOL_v2.1.md`** today (plus its two companions, `AGENT_INTEGRATION.md` and
-this file). Superseded versions (`AURA_PROTOCOL_v2.md`) are kept for audit trail with an
+**`docs/aura/AURA_PROTOCOL_v2.2.md`** today (plus its companions, `AGENT_INTEGRATION.md` and
+this file). Superseded versions (`AURA_PROTOCOL_v2.md`, `AURA_PROTOCOL_v2.1.md`) are kept for audit trail with an
 obsolescence header (§6) — never treated as current. It must never be copied in full into:
 
 - an agent's persistent/cross-session memory,
@@ -23,7 +23,7 @@ Two things must agree, and both are checked, not assumed:
    it answers even when SQL Server (and therefore `/api/project-control`) is unreachable, so an
    agent can always at least confirm which protocol version is current.
 2. **Document source**: the file named in that response's `sourceDocument` field
-   (`docs/aura/AURA_PROTOCOL_v2.1.md` today).
+   (`docs/aura/AURA_PROTOCOL_v2.2.md` today).
 
 There is deliberately **no third, independent source** (no separate config file, no DB table) —
 the task that designed v2.0 explicitly warned against multiple sources of protocol-version truth
@@ -36,7 +36,7 @@ trusting one and ignoring the other.
 | `status` | Meaning |
 |---|---|
 | `DESIGNED_PENDING_ACTIVATION` | Specification complete, no code yet (v2.0's original state). |
-| `IMPLEMENTED_PENDING_PRODUCTION_VERIFICATION` | Implemented and locally verified (tests + local smoke), but not yet deployed/verified in production and not yet the operational fallback for all agents. **This is the value today** (v2.1: authentication + lease implemented, `https://aura.aguarapp.com` deployment/verification still pending — see `AURA-PROTOCOL-V2-01`'s final report §S/§T). |
+| `IMPLEMENTED_PENDING_PRODUCTION_VERIFICATION` | Implemented and locally verified (tests + local smoke), but not yet deployed/verified in production and not yet the operational fallback for all agents. **This is the value today** (v2.2: Roadmap, stage progress, and designated AI_ANALYST approvals implemented locally; production deployment/verification remains pending). |
 | `ACTIVE` | Activated: agents should treat this version as authoritative and `rules/AURA.md`'s pre-v2.x content as historical only. Not yet reached. |
 | `DEPRECATED` | A newer version now supersedes this one; kept readable for audit/history. |
 
@@ -65,17 +65,14 @@ PROJECT_CODE = <that project's sCodigo>
 convention is imposed — this repo's own `rules/AURA.md` + root `CLAUDE.md` pairing is one
 concrete instance of that pattern, not a name every consumer must replicate literally.
 
-## 5. Compatibility strategy for v2.1 / v3.0
+## 5. Compatibility strategy for v2.2 / v3.0
 
-- **Minor versions (v2.x)**: additive only — new optional fields, new event types, new roles'
-  read-only privileges. A `CODING_AGENT` built against v2.0 must keep working unmodified against
-  v2.1 (verified: every pre-existing test kept passing once retrofitted with a bearer token and
-  lease threading — no v2.0 contract field or behavior was removed or changed). In practice,
-  v2.0→v2.1 added enough new material (authentication, leases) to warrant its own file
-  (`docs/aura/AURA_PROTOCOL_v2.1.md`) with a `SUPERSEDED BY` banner added to `v2.md`, rather than
-  editing v2.0's file in place — a judgment call left to whoever ships the next minor version,
-  not a hard rule. Either way: `AuraProtocolMetadataProvider.Current.Version`/`SourceDocument`/
-  `Supersedes` are updated together with the document, in the same change.
+- **Minor versions (v2.x)**: additive to existing consumers. v2.1 added authentication and leases;
+  v2.2 adds Roadmap endpoints/fields and designated AI_ANALYST approvals for coded Roadmap stages.
+  Legacy stages and the existing event contract remain supported. Significant minor versions may
+  receive a new source file; v2.1 is retained with an obsolescence banner rather than edited in place.
+  `AuraProtocolMetadataProvider.Current.Version`/`SourceDocument`/`Supersedes` must be updated with
+  the current document in the same change.
 - **Major versions (v3.0)**: may change contracts in breaking ways. Must add its own
   `docs/aura/AURA_PROTOCOL_v3.md`, and v2.0's file gets the same obsolescence header prescribed
   in §6 below, with `SUPERSEDED BY: AURA_PROTOCOL v3.0`. `AuraProtocolMetadataProvider.Current`
@@ -110,7 +107,7 @@ is not yet `ACTIVE` (§3) and nothing should lose its only working fallback prem
 
 | Artifact | Versioning authority | Current value |
 |---|---|---|
-| Operational protocol | `AuraProtocolMetadataProvider.Current` plus its source document | `AURA_PROTOCOL v2.1` (status remains `IMPLEMENTED_PENDING_PRODUCTION_VERIFICATION`) |
+| Operational protocol | `AuraProtocolMetadataProvider.Current` plus its source document | `AURA_PROTOCOL v2.2` (status remains `IMPLEMENTED_PENDING_PRODUCTION_VERIFICATION`) |
 | Project Memory semantics | `AURA_PROJECT_MEMORY` source document | `v1.0` — `STABLE` after Etapa 3 integration |
 | Project manifest structure | `schemas/project.schema.json` | `schemaVersion 1.0` |
 | Local machine profile structure | `schemas/machine.schema.json` | `schemaVersion 1.0` |

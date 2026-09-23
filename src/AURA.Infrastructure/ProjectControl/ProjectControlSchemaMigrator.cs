@@ -192,7 +192,62 @@ public sealed class ProjectControlSchemaMigrator(
                     nEstado tinyint NOT NULL,
                     dFechaAprobacion datetime2 NULL,
                     nHumanoAprobador int NULL,
+                    sCodigo varchar(50) NULL,
+                    sCriteriosAceptacion nvarchar(1000) NULL,
+                    IdCredentialValidador int NULL,
+                    nActorTipoAprobador tinyint NULL,
+                    IdCredentialAprobador int NULL,
                     CONSTRAINT PK_ProProyectoEtapa PRIMARY KEY (idTenant, IdProyecto, IdEXEC, IdEtapa)
+                );
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectoEtapa') AND name = 'sCodigo')
+                ALTER TABLE dbo.ProProyectoEtapa ADD sCodigo varchar(50) NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectoEtapa') AND name = 'sCriteriosAceptacion')
+                ALTER TABLE dbo.ProProyectoEtapa ADD sCriteriosAceptacion nvarchar(1000) NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectoEtapa') AND name = 'IdCredentialValidador')
+                ALTER TABLE dbo.ProProyectoEtapa ADD IdCredentialValidador int NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectoEtapa') AND name = 'nActorTipoAprobador')
+                ALTER TABLE dbo.ProProyectoEtapa ADD nActorTipoAprobador tinyint NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectoEtapa') AND name = 'IdCredentialAprobador')
+                ALTER TABLE dbo.ProProyectoEtapa ADD IdCredentialAprobador int NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosItems') AND name = 'sCodigoEtapa')
+                ALTER TABLE dbo.ProProyectosItems ADD sCodigoEtapa varchar(50) NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosItems') AND name = 'sResultadoEtapa')
+                ALTER TABLE dbo.ProProyectosItems ADD sResultadoEtapa varchar(30) NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.ProProyectoEtapa') AND name = 'UX_ProProyectoEtapa_Tenant_Project_Exec_Code')
+                CREATE UNIQUE INDEX UX_ProProyectoEtapa_Tenant_Project_Exec_Code
+                    ON dbo.ProProyectoEtapa (idTenant, IdProyecto, IdEXEC, sCodigo)
+                    WHERE sCodigo IS NOT NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ProProyectoRoadmapRevision' AND schema_id = SCHEMA_ID('dbo'))
+                CREATE TABLE dbo.ProProyectoRoadmapRevision (
+                    idTenant int NOT NULL,
+                    IdProyecto int NOT NULL,
+                    IdEXEC int NOT NULL,
+                    nRevision int NOT NULL,
+                    IdEvento uniqueidentifier NOT NULL,
+                    dFechaUtc datetime2 NOT NULL,
+                    nActorId int NOT NULL,
+                    IdCredential int NOT NULL,
+                    sRoadmapJson nvarchar(max) NOT NULL,
+                    CONSTRAINT PK_ProProyectoRoadmapRevision PRIMARY KEY (idTenant, IdProyecto, IdEXEC, nRevision),
+                    CONSTRAINT UQ_ProProyectoRoadmapRevision_Event UNIQUE (idTenant, IdProyecto, IdEXEC, IdEvento)
                 );
             """,
 

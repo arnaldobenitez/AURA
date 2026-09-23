@@ -1,6 +1,6 @@
 # AURA — Agent Integration Guide
 
-Companion to [AURA_PROTOCOL_v2.1.md](AURA_PROTOCOL_v2.1.md) (which extends
+Companion to [AURA_PROTOCOL_v2.2.md](AURA_PROTOCOL_v2.2.md) (which extends
 [v2.0](AURA_PROTOCOL_v2.md)). This document is the practical "how do I actually call this"
 reference; the protocol document remains the only normative specification. If the two ever
 disagree, this document is wrong and must be fixed to match it.
@@ -13,11 +13,11 @@ disagree, this document is wrong and must be fixed to match it.
 - Which of the three roles it is acting as this session: `ANALYST`, `CODING_AGENT`, or
   `AUTONOMOUS_AGENT` (see `AURA_PROTOCOL_v2.md` §3) — this is now enforced, not just declared:
   your credential's `ActorType` (`HUMAN`, `AI_ANALYST`, or `CODER`) is checked against every
-  event's `actor.type` and the request is rejected on mismatch (`AURA_PROTOCOL_v2.1.md` §4).
+  event's `actor.type` and the request is rejected on mismatch (`AURA_PROTOCOL_v2.2.md` §3).
 - Its own stable identity: `agent`, `model`, and `environment` strings — required for `CODER`/
   `AI_ANALYST` actors, free text (no fixed registry of allowed agent names).
 - Optionally, a `workStream` if the project has independent concurrent units of work
-  (`AURA_PROTOCOL_v2.1.md` §5) — omit it for a project with none.
+  (`AURA_PROTOCOL_v2.2.md` §4) — omit it for a project with none.
 
 ## 2. Getting a token
 
@@ -53,30 +53,35 @@ with the same credential/secret.
 | Readiness | `GET /health/ready` (depends on SQL Server) | none |
 | OpenAPI contract (Development only) | `GET /openapi/v1.json` | none |
 
+Roadmap endpoints: `GET /api/project-control/projects/{projectCode}/roadmap?tenantId={n}[&workStream=...]` reads ordered stage state; `PUT /api/project-control/projects/{projectCode}/roadmap` defines or updates the plan and requires a HUMAN credential.
+
 Base URLs: `http://localhost:5235` in development, `https://aura.aguarapp.com` in production
 (mounted at `/api` on IIS). Never assume `localhost` — check which environment you are actually
 targeting.
+
+The Roadmap read endpoint returns the ordered stages for the active EXEC/workStream. A HUMAN credential configures or updates the plan using `PUT /api/project-control/projects/{projectCode}/roadmap` with `tenantId`, `workStream`, a new `eventId`, and ordered `stages[]` (`stageCode`, `description`, `order`, optional `acceptanceCriteria`, and active `AI_ANALYST` `validatorCredentialId`). The write is idempotent and audited; existing stages cannot be removed, and started stage definitions are locked.
 
 ## 4. Minimal working sequence
 
 ```text
 1. POST /api/auth/token                                        -> get a Bearer token
 2. GET  /api/aura-protocol                                     -> confirm protocol version/status
-3. GET  /api/project-control?tenantId={n}                      -> find your project, read LastItemId/CurrentControl
-4. POST /api/project-control/events  { eventType: CLAIM, ... }  -> take control; response.lease has LeaseId/Version
-5. GET  /api/project-control?tenantId={n}                      -> READ-BACK: confirm CurrentControl is now you
-... PROGRESS at real milestones, always sending the last lease.leaseId/version, always reading back after ...
-6. POST /api/project-control/events  { eventType: HANDOFF or COMPLETION, ... }
-7. GET  /api/project-control?tenantId={n}                      -> READ-BACK: confirm the handoff/close took effect
+3. GET  /api/project-control?tenantId={n}                      -> find your project and read LastItemId/CurrentControl
+4. GET  /api/project-control/projects/{code}/roadmap?tenantId={n} -> read ordered stages, criteria and assigned validator
+5. POST /api/project-control/events { eventType: CLAIM, ... }    -> take control; response.lease has LeaseId/Version
+6. PROGRESS at verified milestones with stageCode/stageProgress and the latest lease; READ-BACK after every write
+7. HANDOFF to the assigned AI_ANALYST when stage progress reaches 100%; do not self-approve
+8. Designated AI_ANALYST posts APPROVAL with stageCode, PASS/PASS_WITH_WARNINGS, summary and evidence
+9. GET Roadmap and board                                             -> READ-BACK before reporting success
 ```
 
-## 5. The lease (new in v2.1)
+## 5. The lease (introduced in v2.1)
 
 `CLAIM` and `REQUEST` never send `leaseId`/`expectedLeaseVersion` (they establish/don't touch
 one). Every `PROGRESS`, `HANDOFF`, `BLOCKER`, and `DEPLOYMENT` **must** include the `leaseId` and
 `expectedLeaseVersion` from the previous response's `lease` object, or the request is rejected
 with `400 VALIDATION_FAILED`. `REQUEST`/`APPROVAL`/`REWORK` don't need one (they're HUMAN
-governance actions, not part of the exclusive-work lease — see `AURA_PROTOCOL_v2.1.md` §6, §8).
+governance actions, not part of the exclusive-work lease — see `AURA_PROTOCOL_v2.2.md` §5, §7).
 
 ```json
 { "leaseId": "…", "version": 3, "expiresAtUtc": "…", "holderActorType": "CODER", "holderActorId": 1 }
@@ -89,7 +94,7 @@ If someone else holds it, or your version is stale, or it expired: `409` with
 
 - **Writes and reads both require authentication (since 2026-08-28).** `GET /api/project-control`
   and its history endpoint now also need a Bearer token — a basic web login was added on top of
-  everything else in this document (see `AURA_PROTOCOL_v2.1.md` §12); the same token from either
+  everything else in this document (see `AURA_PROTOCOL_v2.2.md` §3); the same token from either
   `/api/auth/token` (agents) or `/api/auth/login` (humans) works for both.
 - Never place secrets (connection strings, tokens, credential secrets) in any field of the event
   contract, or in `agentName`/`reference`/free-text fields. A credential's secret is shown once,
@@ -111,17 +116,13 @@ expect is proof.
 - `summary` is required, ≤ 300 chars. `details`, `nextAction`, `blocker`, `reference` ≤ 1000
   chars. `stage`, `environment`, `agent`, `model`, `workStream` ≤ 100 chars.
 - `stageProgress` must be `0`–`100` with at most two decimals, or omitted.
-- `eventType = REQUEST` or `APPROVAL` **requires** `actor.type = HUMAN` — rejected from
-  `CODER`/`AI_ANALYST` with `400 VALIDATION_FAILED`, and now also unforgeable: your credential's
-  authenticated `ActorType` must itself be `HUMAN`, or the request is `403 Forbidden` regardless
-  of what the body claims.
+- `REQUEST` and a legacy `APPROVAL` without `stageCode` require `actor.type = HUMAN`. A Roadmap `APPROVAL` with `stageCode` instead requires the assigned `AI_ANALYST` credential. The authenticated JWT identity is enforced; a caller cannot self-assert another actor type.
 - `actor.type = CODER` or `AI_ANALYST` **requires** non-empty `agent`, `model`, and
   `environment` — `400 VALIDATION_FAILED` if one is missing.
-- Every event but `CLAIM`/`REQUEST` requires `leaseId` + `expectedLeaseVersion` (§5) —
-  `400 VALIDATION_FAILED` if absent.
-- `APPROVAL` on a stage whose `stageProgress` is not `100` is rejected as an invalid transition
-  (`400`), not silently accepted.
-- `COMPLETION` is rejected unless every stage of the current EXEC is already `Approved`.
+- `PROGRESS`, `HANDOFF`, `BLOCKER`, and `DEPLOYMENT` require `leaseId` + `expectedLeaseVersion` (§5). `APPROVAL`, `REWORK`, `ROADMAP` plan management and `COMPLETION` do not.
+- Roadmap stages require a `stageCode`; `stageProgress` is `0`–`100`. Only the assigned AI_ANALYST credential may send `APPROVAL` for that Roadmap stage, with `stageOutcome = PASS` or `PASS_WITH_WARNINGS`, after progress reaches `100`. A CODER or a different validator is rejected. Legacy stages without a Roadmap code retain HUMAN approval.
+- `PASS_WITH_WARNINGS` counts as a closed milestone in global progress, with the warning outcome/evidence retained.
+- `COMPLETION` is rejected unless all stages of the active EXEC are approved.
 - A `CLAIM` ignores any `nextControl` sent alongside it — the claimant becomes control,
   regardless of what `nextControl` says. Do not rely on combining `CLAIM` with a redirect.
 

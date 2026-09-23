@@ -10,9 +10,10 @@ interface ProjectGridProps {
   projects: ProjectControlProject[];
   highlightedProjectId?: number | null;
   onProjectSelect: (project: ProjectControlProject) => void;
+  onRoadmapOpen: (project: ProjectControlProject) => void;
 }
 
-export function ProjectGrid({ projects, highlightedProjectId = null, onProjectSelect }: ProjectGridProps) {
+export function ProjectGrid({ projects, highlightedProjectId = null, onProjectSelect, onRoadmapOpen }: ProjectGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -111,10 +112,22 @@ export function ProjectGrid({ projects, highlightedProjectId = null, onProjectSe
                 </span>
               </td>
               <td>
-                <span className="pc-truncate" title={project.currentStage ?? undefined}>
-                  {project.currentStage ?? <span className="pc-value--unknown">Sin informar</span>}
-                </span>
-                <ProgressIndicator value={project.stageProgress} label="Avance de la etapa actual" />
+                <button
+                  type="button"
+                  className="pc-grid__stage-button"
+                  disabled={!project.projectCode}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onRoadmapOpen(project);
+                  }}
+                  aria-label={`Ver Roadmap de ${project.projectName}`}
+                  title="Ver evolución del RoadMap"
+                >
+                  <span className="pc-truncate" title={project.currentStage ?? undefined}>
+                    {project.currentStage ?? <span className="pc-value--unknown">Sin informar</span>}
+                  </span>
+                  <ProgressIndicator value={project.stageProgress} label="Avance de la etapa actual" />
+                </button>
               </td>
               <td>
                 <ProgressIndicator value={project.execProgress} label="Avance total del EXEC" />

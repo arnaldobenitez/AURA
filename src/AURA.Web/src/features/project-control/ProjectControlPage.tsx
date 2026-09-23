@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { RoadmapModal } from "../project-details/RoadmapModal";
 import { CreateProjectModal } from "./CreateProjectModal";
 import { HealthIndicator } from "./HealthIndicator";
 import { ProjectGrid } from "./ProjectGrid";
@@ -16,6 +17,7 @@ export function ProjectControlPage({ onProjectSelect }: { onProjectSelect: (proj
   const { soundEnabled, setSoundEnabled, needsAudioUnlock, unlockAudio } = useProjectControlAlerts(board);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [highlightedProjectId, setHighlightedProjectId] = useState<number | null>(null);
+  const [roadmapProject, setRoadmapProject] = useState<ProjectControlProject | null>(null);
 
   const isInitialLoading = board === null && isLoading;
 
@@ -86,6 +88,7 @@ export function ProjectControlPage({ onProjectSelect }: { onProjectSelect: (proj
               projects={board.projects}
               highlightedProjectId={highlightedProjectId}
               onProjectSelect={onProjectSelect}
+              onRoadmapOpen={setRoadmapProject}
             />
           </>
         )}
@@ -96,6 +99,13 @@ export function ProjectControlPage({ onProjectSelect }: { onProjectSelect: (proj
         tenantId={TENANT_ID}
         onClose={() => setIsCreateModalOpen(false)}
         onCreated={handleProjectCreated}
+      />
+      <RoadmapModal
+        open={roadmapProject !== null}
+        projectCode={roadmapProject?.projectCode ?? null}
+        tenantId={TENANT_ID}
+        workStream={roadmapProject?.workStream ?? null}
+        onClose={() => setRoadmapProject(null)}
       />
     </div>
   );

@@ -2,10 +2,10 @@
 
 ```text
 STATUS: SUPERSEDED
-SUPERSEDED BY: AURA_PROTOCOL v2.1 (docs/aura/AURA_PROTOCOL_v2.1.md)
+SUPERSEDED BY: AURA_PROTOCOL v2.2 (docs/aura/AURA_PROTOCOL_v2.2.md)
 ```
 
-> `docs/aura/AURA_PROTOCOL_v2.1.md` is now the current specification (additive: authentication,
+> `docs/aura/AURA_PROTOCOL_v2.2.md` is now the current specification (Roadmap evolution and designated validator approval, in addition to authentication,
 > per-workstream leases, credential lifecycle — see its §1 for exactly what changed vs. this
 > document). Kept here as the historical v2.0 spec; nothing below was edited.
 
