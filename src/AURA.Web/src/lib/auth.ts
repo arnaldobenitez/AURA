@@ -3,7 +3,6 @@ const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
 
 export interface StoredSession {
   accessToken: string;
-  expiresAtUtc: string;
   userName: string;
 }
 
@@ -15,10 +14,6 @@ export function loadSession(): StoredSession | null {
     }
     const session = JSON.parse(raw) as StoredSession;
     if (!session.accessToken) {
-      return null;
-    }
-    if (new Date(session.expiresAtUtc).getTime() <= Date.now()) {
-      window.localStorage.removeItem(STORAGE_KEY);
       return null;
     }
     return session;
@@ -51,7 +46,7 @@ export async function login(email: string, password: string): Promise<StoredSess
   }
 
   const body = (await response.json()) as { accessToken: string; expiresAtUtc: string; userName: string };
-  const session: StoredSession = { accessToken: body.accessToken, expiresAtUtc: body.expiresAtUtc, userName: body.userName };
+  const session: StoredSession = { accessToken: body.accessToken, userName: body.userName };
   saveSession(session);
   return session;
 }
