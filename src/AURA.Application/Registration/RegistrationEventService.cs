@@ -105,6 +105,15 @@ public sealed class RegistrationEventService(IRegistrationEventRepository reposi
         CancellationToken cancellationToken) =>
         repository.CanCredentialRegisterForProjectAsync(tenantId, credentialId, projectCode, cancellationToken);
 
+    public Task<bool> ExistsAsync(Guid eventId, CancellationToken cancellationToken) =>
+        repository.ExistsAsync(eventId, cancellationToken);
+
+    public Task<bool> IsIngestionCredentialActiveAsync(
+        int tenantId,
+        int credentialId,
+        CancellationToken cancellationToken) =>
+        repository.IsIngestionCredentialActiveAsync(tenantId, credentialId, cancellationToken);
+
     private static List<string> Validate(
         RegisterRegistrationEventRequest request,
         out RegistrationEventType eventType,

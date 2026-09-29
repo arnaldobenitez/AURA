@@ -77,6 +77,17 @@ El diseño implementado agrega `AuraAdminAudit` append-only con tenant, código 
 
 La API local `localhost:5235` no respondió durante la auditoría; tampoco se obtuvo acceso a SQL Server. No se inspeccionaron filas ni esquema desplegado real. Por tanto, la migración está revisada como código pero no fue aplicada ni verificada contra base real; el estado operacional de `SMT` sigue sin confirmar.
 
+### 8.1 Verificación posterior (2026-09-29)
+
+Se levantó SQL Server 2022 en contenedor descartable con las tablas base mínimas esperadas por el migrador y se ejecutó la suite SQL completa: **90/90 en verde** tras corregir tres defectos reales detectados por primera ejecución:
+
+- El read-back cross-tenant respondía `404`; v2.3 §8 exige `403`. Se agregó `ExistsAsync(eventId)` para distinguir evento inexistente de evento ajeno.
+- El read-back de eventos `PROVISIONAL` rechazaba credenciales `PROJECT_SCOPED` al no tener proyecto para validar; ahora se permite con cualquier credencial `INGESTION` activa del tenant (`IsIngestionCredentialActiveAsync`), manteniendo scope para eventos resueltos (DEC-0004).
+- El fixture de integración fijaba `linkedActorId=1` para credenciales `HUMAN`, rechazando los `actor.id` 600/800+ usados por los tests gobernados preexistentes; se revirtió el pin.
+- Dos asserts del suite eran erróneos (rotación comparaba `credentialId` contra `projectId`; el segundo tenant enviaba `tenantId` del primario).
+
+La migración sigue sin aplicarse a ninguna base autorizada ni a producción.
+
 ## 9. Hallazgo de seguridad preexistente
 
 En el código existente de inicialización del login humano se identificó una contraseña default literal. El valor se omite deliberadamente de esta documentación y de logs. No se modificó ese subsistema como parte del ABM; antes de exponer el portal en un entorno real, el operador debe revisar el bootstrap y rotar cualquier credencial humana afectada. La ruta `SchemaOnly` no ejecuta ese seed.

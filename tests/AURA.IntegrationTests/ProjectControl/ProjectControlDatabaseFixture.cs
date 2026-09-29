@@ -126,10 +126,9 @@ public sealed class ProjectControlDatabaseFixture : IAsyncLifetime
     public async Task<(int CredentialId, string Secret)> CreateCredentialAsync(
         int tenantId, string actorType, string agentName, IReadOnlyList<int>? projectIds = null)
     {
-        var linkedActorId = actorType == "HUMAN" ? 1 : (int?)null;
         using var createRequest = new HttpRequestMessage(HttpMethod.Post, "/api/admin/agent-credentials")
         {
-            Content = JsonContent.Create(new { tenantId, actorType, agentName, linkedActorId, projectIds }, options: JsonOptions),
+            Content = JsonContent.Create(new { tenantId, actorType, agentName, projectIds }, options: JsonOptions),
         };
         createRequest.Headers.Add("X-Admin-Api-Key", AdminApiKeyFilter.DevelopmentOnlyPlaceholder);
         var createResponse = await _bootstrapClient.SendAsync(createRequest);

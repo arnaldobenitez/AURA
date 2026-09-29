@@ -6,5 +6,9 @@ public interface IRegistrationEventRepository
 
     Task<RegistrationEventDto?> GetAsync(int tenantId, Guid eventId, CancellationToken cancellationToken);
 
+    Task<bool> ExistsAsync(Guid eventId, CancellationToken cancellationToken);
+
     Task<bool> CanCredentialRegisterForProjectAsync(int tenantId, int credentialId, string projectCode, CancellationToken cancellationToken);
+
+    Task<bool> IsIngestionCredentialActiveAsync(int tenantId, int credentialId, CancellationToken cancellationToken);
 }

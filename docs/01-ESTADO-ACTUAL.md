@@ -70,6 +70,10 @@ read-back del tablero y del endpoint Roadmap devolvió HTTP 200. La producción 
 Roadmap v0.1 está publicado en el IIS interno y su esquema está aplicado. El endpoint devuelve HTTP 200, pero el EXEC
 actual de AURA aún no tiene etapas configuradas (`totalStages=0`); el plan y su AI_ANALYST designado siguen pendientes.
 ABM y validación de scope están implementados localmente, pero su esquema aditivo aún no se aplicó.
+La suite SQL de integración se ejecutó completa contra SQL Server 2022 en contenedor de prueba
+(90/90 en verde) y detectó tres defectos corregidos: read-back cross-tenant devolvía 404 en vez de
+403, el read-back de eventos PROVISIONAL se rechazaba para credenciales `PROJECT_SCOPED`, y un pin
+de `linkedActorId=1` en el fixture rompía el canal gobernado para actores humanos.
 La API local `localhost:5235` no respondió en esta sesión; no se emitieron eventos AURA ni se confirmó
 el estado operativo de `SMT`.
 
@@ -84,8 +88,9 @@ el estado operativo de `SMT`.
 4. La publicación/migración de producción pública queda pendiente de autorización y smoke test independiente.
 5. Para activar v2.3 en un entorno real: aplicar el esquema schema-only, publicar la API, crear una credencial
    `INGESTION`, registrar un evento de prueba y hacer read-back. Producción pública sigue en v2.2.
-6. Las pruebas SQL de integración requieren una connection string de test para ejecutar los escenarios de
-   persistencia real; actualmente están omitidas cuando no hay conectividad.
+6. Las pruebas SQL de integración ya se ejecutaron contra un SQL Server 2022 en contenedor descartable
+   (base `AuraTest`, esquema vía `ApplySchemaOnly` + seed `ApplyAsync`); queda pendiente repetirlas
+   contra el entorno autorizado tras aplicar el esquema.
 7. Revisar el diff schema-only y confirmar esquema real/duplicados del catálogo con DBA; crear y verificar
    backup antes de ejecutar `scripts/project-control-schema-update.ps1 -SchemaOnly -TargetServer <...> -BackupVerified`.
 8. Provisionar en configuración servidor-side los IDs humanos tenant-admin reales; hoy el default es
@@ -97,10 +102,11 @@ el estado operativo de `SMT`.
 
 ## Bloqueos
 
-La conexión SQL de test no está configurada: las pruebas de integración con persistencia (82) se omiten.
-No se aplicó ninguna migración ni se ejecutó contra base local o producción. El API AURA local también
-estuvo inaccesible (`localhost:5235`), por lo que quedan pendientes smoke/read-back v2.3 y la validación
-operativa del proyecto SMT.
+No se aplicó ninguna migración ni se ejecutó contra base local o producción: el esquema schema-only
+sigue pendiente de backup verificado y autorización. El API AURA local también estuvo inaccesible
+(`localhost:5235`), por lo que quedan pendientes smoke/read-back v2.3 y la validación operativa del
+proyecto SMT. La ausencia de SQL Server ya no bloquea la suite de integración: se resolvió con un
+contenedor `mcr.microsoft.com/mssql/server:2022` en el entorno de ejecución.
 
 ## Problemas conocidos
 
@@ -120,7 +126,7 @@ El launcher y el smoke test son scripts locales, sin red, base de datos, depende
 - `dotnet build AURA.sln --no-restore`: correcto, 0 errores y 0 warnings.
 - `AURA.UnitTests`: 43 superados, incluyendo scope de registro y autorización tenant-admin fail-closed.
 - `AURA.ProjectMemory.Tests`: 154 superados.
-- `AURA.IntegrationTests`: 8 superados y 82 omitidos por ausencia de conexión SQL de test. Los escenarios SQL del ABM/scope compilan, pero no se ejecutaron contra SQL Server.
+- `AURA.IntegrationTests`: 90/90 superados contra SQL Server 2022 en contenedor de prueba (esquema creado por `ApplySchemaOnly` sobre tablas base mínimas, seed humano vía `ApplyAsync` una sola vez). Al ejecutar la suite se corrigieron: read-back cross-tenant → `403` (antes `404`), read-back de evento `PROVISIONAL` → permitido para cualquier credencial `INGESTION` activa del tenant (antes `403` incorrecto), fixture `linkedActorId` → sin pin (restaurado el comportamiento pre-handoff), y dos asserts erróneos del propio suite (rotación y tenantId del segundo tenant).
 - `AURA.Web`: `npm run typecheck`, `npm run lint` y `npm run build` correctos; oxlint 0 warnings/errores.
 - El migrador schema-only compila y verifica tablas/columnas/índices del ABM; no fue ejecutado, no hubo backup ni cambios de base.
 - AURA API local `localhost:5235` no respondió; no se hizo read-back/registro operativo de esta sesión.

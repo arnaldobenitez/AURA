@@ -1,7 +1,7 @@
 # ROADMAP — ABM administrativo de proyectos y credenciales
 
-**Última actualización:** 2026-09-28  
-**Estado global:** implementación local en curso de verificación; migración y smoke operativo pendientes. Producción no tocada.
+**Última actualización:** 2026-09-29  
+**Estado global:** implementación local verificada con suite SQL completa en verde; migración y smoke operativo pendientes. Producción no tocada.
 
 | Etapa | Resultado | Estado |
 |---|---|---|
@@ -9,8 +9,8 @@
 | R1 — Seguridad y modelo | Autorización portal `PORTAL_LOGIN` + allowlist admin por tenant; compatibilidad backend Admin API key; scope `AgentCredentialProject`; transición legacy explícita; auditoría append-only. | Implementada en código local |
 | R2 — ABM de proyectos | Listar/crear/actualizar/activar/pausar/desactivar, unicidad tenant/código, no borrado físico, auditoría de actor/fechas. | Implementada en código local |
 | R3 — ABM de credenciales | Crear `INGESTION` con uno o más proyectos; rotar/revocar; listados sin secreto; vista one-time/copy y variables para Devin. | Implementada en código local |
-| R4 — Protección del canal | Revalidar credencial, expiración, estado de proyecto y asignación para cada POST/read-back; scope revocado bloquea JWT existente. | Implementada en código local |
-| R5 — Verificación automatizada | Unit tests, integración HTTP/SQL, portal typecheck/lint/build. | Unit tests/build frontend; integración SQL pendiente de entorno |
+| R4 — Protección del canal | Revalidar credencial, expiración, estado de proyecto y asignación para cada POST/read-back; scope revocado bloquea JWT existente. | Implementada y verificada: read-back cross-tenant `403`, provisional legible por credencial activa del tenant (DEC-0004) |
+| R5 — Verificación automatizada | Unit tests, integración HTTP/SQL, portal typecheck/lint/build. | Completada en contenedor de prueba: 43 unit + 154 project-memory + 90 integración SQL (SQL Server 2022 en Docker); 3 defectos corregidos (ver DEC-0004 y ESTADO-ACTUAL) |
 | R6 — Migración revisada | Revisar cambios aditivos del schema migrator; ejecutar preflight y revisar backup verificado. | Código revisado; backup/migración NO ejecutados |
 | R7 — Deploy controlado | Aplicar schema-only vía script explícito, desplegar API/portal, configurar allowlist humana y verificar endpoints. | Pendiente de autorización/entorno |
 | R8 — Smoke/read-back | Crear o reutilizar `SMT`, crear credencial del tenant 1 asignada a SMT, probar token, escribir evento de prueba, leerlo, comprobar rechazo en proyecto no asignado, rotar/revocar. | Pendiente; no se enviaron eventos reales |

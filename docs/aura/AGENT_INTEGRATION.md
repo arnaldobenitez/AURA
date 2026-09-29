@@ -118,7 +118,11 @@ project or authorization. Registration never changes the board, current
 control, Roadmap, EXEC, workStream, leases, approvals, or execution status.
 
 Read-back is `GET /api/agent-registration/events/{eventId}?tenantId={n}` with an `INGESTION`
-token for the same tenant. For the full request/response and safety rules, see
+token for the same tenant. Reading an `eventId` that exists under a different tenant returns
+`403`, not `404` — `404` means the `eventId` does not exist at all. An event stored as
+`PROVISIONAL` (no resolved project) may be read back by any active `INGESTION` credential of
+the tenant; a resolved event additionally requires active project scope on the reading
+credential. For the full request/response and safety rules, see
 [AURA_AGENT_REGISTRATION_PROTOCOL_v2.3.md](AURA_AGENT_REGISTRATION_PROTOCOL_v2.3.md).
 
 ## 7. Security caveats (read this before integrating anything)

@@ -81,10 +81,21 @@ public sealed class AgentRegistrationController(RegistrationEventService registr
         var registrationEvent = await registrationEventService.GetAsync(tenantId, eventId, cancellationToken);
         if (registrationEvent is null)
         {
-            return NotFound();
+            // Cross-tenant reads are 403 per v2.3 §8; only a genuinely unknown eventId is 404.
+            return await registrationEventService.ExistsAsync(eventId, cancellationToken)
+                ? Problem(
+                    title: "No autorizado.",
+                    detail: "El evento pertenece a otro tenant.",
+                    statusCode: StatusCodes.Status403Forbidden)
+                : NotFound();
         }
 
-        if (!await registrationEventService.CanCredentialRegisterForProjectAsync(tenantId, actor.CredentialId, registrationEvent.ProjectCode, cancellationToken))
+        // A provisional event has no resolved project to scope against: any active INGESTION
+        // credential of the tenant may read it back. Resolved events require project scope.
+        var authorized = registrationEvent.ProjectId is null
+            ? await registrationEventService.IsIngestionCredentialActiveAsync(tenantId, actor.CredentialId, cancellationToken)
+            : await registrationEventService.CanCredentialRegisterForProjectAsync(tenantId, actor.CredentialId, registrationEvent.ProjectCode, cancellationToken);
+        if (!authorized)
         {
             return Problem(
                 title: "No autorizado.",

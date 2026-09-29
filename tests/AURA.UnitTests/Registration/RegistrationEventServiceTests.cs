@@ -261,5 +261,14 @@ public sealed class RegistrationEventServiceTests
             string projectCode,
             CancellationToken cancellationToken) =>
             Task.FromResult(HasProjectScope);
+
+        public Task<bool> ExistsAsync(Guid eventId, CancellationToken cancellationToken) =>
+            Task.FromResult(false);
+
+        public Task<bool> IsIngestionCredentialActiveAsync(
+            int tenantId,
+            int credentialId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(HasProjectScope);
     }
 }

@@ -183,6 +183,47 @@ public sealed class SqlRegistrationEventRepository(AuraDbContext dbContext) : IR
         }
     }
 
+    public async Task<bool> ExistsAsync(Guid eventId, CancellationToken cancellationToken)
+    {
+        await dbContext.Database.OpenConnectionAsync(cancellationToken);
+        try
+        {
+            var connection = (SqlConnection)dbContext.Database.GetDbConnection();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT 1 FROM dbo.AgentRegistrationEvent WHERE IdEvento = @eventId;";
+            command.Parameters.Add("@eventId", SqlDbType.UniqueIdentifier).Value = eventId;
+            return await command.ExecuteScalarAsync(cancellationToken) is not null;
+        }
+        finally
+        {
+            await dbContext.Database.CloseConnectionAsync();
+        }
+    }
+
+    public async Task<bool> IsIngestionCredentialActiveAsync(
+        int tenantId,
+        int credentialId,
+        CancellationToken cancellationToken)
+    {
+        await dbContext.Database.OpenConnectionAsync(cancellationToken);
+        try
+        {
+            var connection = (SqlConnection)dbContext.Database.GetDbConnection();
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                "SELECT 1 FROM dbo.AgentCredential " +
+                "WHERE idTenant = @tenantId AND IdCredential = @credentialId AND nActorTipo = 4 " +
+                "AND RevokedAtUtc IS NULL AND (ExpiresAtUtc IS NULL OR ExpiresAtUtc > SYSUTCDATETIME());";
+            command.Parameters.AddWithValue("@tenantId", tenantId);
+            command.Parameters.AddWithValue("@credentialId", credentialId);
+            return await command.ExecuteScalarAsync(cancellationToken) is not null;
+        }
+        finally
+        {
+            await dbContext.Database.CloseConnectionAsync();
+        }
+    }
+
     private static async Task<bool> CanCredentialRegisterForProjectAsync(
         SqlConnection connection,
         SqlTransaction? transaction,

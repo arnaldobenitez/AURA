@@ -239,7 +239,7 @@ public sealed class AgentRegistrationEndpointTests(ProjectControlDatabaseFixture
         Assert.Equal(HttpStatusCode.Forbidden, crossTenantReadResponse.StatusCode);
 
         var secondTenant = await PostRegistrationAsync(
-            CreateRequest(eventId, "TENANT2"),
+            CreateRequest(eventId, "TENANT2") with { TenantId = ProjectControlDatabaseFixture.SecondaryTenantId },
             ProjectControlDatabaseFixture.SecondaryTenantId);
         Assert.Equal(HttpStatusCode.Created, secondTenant.StatusCode);
     }

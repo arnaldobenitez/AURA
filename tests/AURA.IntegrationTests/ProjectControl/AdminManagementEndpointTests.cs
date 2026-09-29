@@ -158,7 +158,7 @@ public sealed class AdminManagementEndpointTests(ProjectControlDatabaseFixture f
         var rowsAfterRotation = await listedAfterRotation.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
         var newMetadata = Assert.Single(rowsAfterRotation.EnumerateArray(), row => row.GetProperty("credentialId").GetInt32() == newId);
         Assert.Equal(oldId, newMetadata.GetProperty("rotatedFromCredentialId").GetInt32());
-        Assert.Equal(oldId, Assert.Single(replacement.GetProperty("projects").EnumerateArray()).GetProperty("projectId").GetInt32());
+        Assert.Equal(projectId, Assert.Single(replacement.GetProperty("projects").EnumerateArray()).GetProperty("projectId").GetInt32());
         Assert.Equal(HttpStatusCode.Unauthorized, (await fixture.RequestTokenRawAsync(ProjectControlDatabaseFixture.PrimaryTenantId, oldId, oldSecret)).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await RegisterAsync(oldToken, ProjectControlDatabaseFixture.PrimaryTenantId, "SMTROT")).StatusCode);
 
