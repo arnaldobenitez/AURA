@@ -84,7 +84,8 @@ public sealed record CreateProjectCommand(
     string? WorkingPath,
     string? Repository,
     ProjectStatus Status,
-    int? HumanResponsibleId);
+    int? HumanResponsibleId,
+    int? CreatedByUserId = null);
 
 public interface IProjectControlRepository
 {

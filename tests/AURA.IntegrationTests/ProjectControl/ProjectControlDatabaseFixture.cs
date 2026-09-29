@@ -1,10 +1,19 @@
 using System.Net.Http.Headers;
+using System.Collections.Concurrent;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
 using System.Text.Json;
 using AURA.Api.Admin;
+using AURA.Application.AgentCredential;
+using AURA.Application.Security;
+using AURA.Domain.ProjectControl;
+using AURA.Infrastructure.ProjectControl;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace AURA.IntegrationTests.ProjectControl;
 
@@ -29,6 +38,7 @@ public sealed class ProjectControlDatabaseFixture : IAsyncLifetime
     private string? _connectionString;
     private readonly Dictionary<(int TenantId, string ActorType), string> _tokens = new();
     private readonly Dictionary<(int TenantId, string ActorType), int> _credentialIds = new();
+    private readonly ConcurrentQueue<string> _capturedLogs = new();
     private HttpClient _bootstrapClient = null!;
 
     public WebApplicationFactory<global::Program> Factory { get; private set; } = null!;
@@ -36,6 +46,10 @@ public sealed class ProjectControlDatabaseFixture : IAsyncLifetime
     public HttpClient Client { get; private set; } = null!;
 
     public bool IsAvailable => _connectionString is not null;
+
+    public int CapturedLogCount => _capturedLogs.Count;
+
+    public IReadOnlyList<string> CapturedLogsSince(int index) => _capturedLogs.Skip(index).ToArray();
 
     public async Task InitializeAsync()
     {
@@ -54,12 +68,22 @@ public sealed class ProjectControlDatabaseFixture : IAsyncLifetime
                 configurationBuilder.AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["ConnectionStrings:DefaultConnection"] = connectionString,
+                    [$"Admin:TenantAdminUserIds:{PrimaryTenantId}"] = "1",
+                    [$"Admin:TenantAdminUserIds:{SecondaryTenantId}"] = "1",
                 });
             });
+            builder.ConfigureLogging(logging => logging.AddProvider(new CapturingLoggerProvider(_capturedLogs)));
         });
         // Raw client (no default auth) - used only for the bootstrap calls below (admin/token
         // endpoints, which are anonymous or use X-Admin-Api-Key, never a Bearer token).
         _bootstrapClient = Factory.CreateClient();
+
+        using (var scope = Factory.Services.CreateScope())
+        {
+            await scope.ServiceProvider
+                .GetRequiredService<IProjectControlSchemaMigrator>()
+                .ApplySchemaOnlyAsync(CancellationToken.None);
+        }
 
         await ResetTestDataAsync();
         await ProvisionCredentialsAsync(PrimaryTenantId);
@@ -91,20 +115,48 @@ public sealed class ProjectControlDatabaseFixture : IAsyncLifetime
             _credentialIds[(tenantId, actorType)] = credentialId;
             _tokens[(tenantId, actorType)] = await MintTokenAsync(tenantId, credentialId, secret);
         }
+
+        var projectId = await CreateProjectRawAsync(tenantId, $"INGESTION-SCOPE-{tenantId}", "Ingestion scope fixture");
+        var (ingestionCredentialId, ingestionSecret) = await CreateCredentialAsync(
+            tenantId, "INGESTION", "test-ingestion", [projectId]);
+        _credentialIds[(tenantId, "INGESTION")] = ingestionCredentialId;
+        _tokens[(tenantId, "INGESTION")] = await MintTokenAsync(tenantId, ingestionCredentialId, ingestionSecret);
     }
 
-    /// <summary>Creates a new AgentCredential via the admin endpoint; returns (credentialId, plaintext secret).</summary>
-    public async Task<(int CredentialId, string Secret)> CreateCredentialAsync(int tenantId, string actorType, string agentName)
+    public async Task<(int CredentialId, string Secret)> CreateCredentialAsync(
+        int tenantId, string actorType, string agentName, IReadOnlyList<int>? projectIds = null)
     {
+        var linkedActorId = actorType == "HUMAN" ? 1 : (int?)null;
         using var createRequest = new HttpRequestMessage(HttpMethod.Post, "/api/admin/agent-credentials")
         {
-            Content = JsonContent.Create(new { tenantId, actorType, agentName }, options: JsonOptions),
+            Content = JsonContent.Create(new { tenantId, actorType, agentName, linkedActorId, projectIds }, options: JsonOptions),
         };
         createRequest.Headers.Add("X-Admin-Api-Key", AdminApiKeyFilter.DevelopmentOnlyPlaceholder);
         var createResponse = await _bootstrapClient.SendAsync(createRequest);
         createResponse.EnsureSuccessStatusCode();
         var created = await createResponse.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
         return (created.GetProperty("credentialId").GetInt32(), created.GetProperty("secret").GetString()!);
+    }
+
+    public async Task<(int CredentialId, string Secret, string Token)> CreateLegacyIngestionCredentialAsync(int tenantId, string agentName)
+    {
+        var secretBytes = RandomNumberGenerator.GetBytes(32);
+        var secret = Convert.ToBase64String(secretBytes);
+        var (salt, hash) = Pbkdf2PasswordHasher.Hash(secretBytes);
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "INSERT INTO dbo.AgentCredential (idTenant, IdCredential, nActorTipo, sAgentName, SecretSalt, SecretHash, SecretIterations, CreatedAtUtc) " +
+            "OUTPUT INSERTED.IdCredential SELECT @tenantId, ISNULL((SELECT MAX(IdCredential) FROM dbo.AgentCredential WHERE idTenant = @tenantId), 0) + 1, 4, @agentName, @salt, @hash, @iterations, SYSUTCDATETIME();";
+        command.Parameters.AddWithValue("@tenantId", tenantId);
+        command.Parameters.AddWithValue("@agentName", agentName);
+        command.Parameters.Add("@salt", System.Data.SqlDbType.VarBinary).Value = salt;
+        command.Parameters.Add("@hash", System.Data.SqlDbType.VarBinary).Value = hash;
+        command.Parameters.AddWithValue("@iterations", Pbkdf2PasswordHasher.Iterations);
+        var credentialId = (int)(await command.ExecuteScalarAsync())!;
+        var token = await MintTokenAsync(tenantId, credentialId, secret);
+        return (credentialId, secret, token);
     }
 
     /// <summary>Exchanges a credential id/secret for a JWT access token via POST /api/auth/token.</summary>
@@ -132,6 +184,19 @@ public sealed class ProjectControlDatabaseFixture : IAsyncLifetime
     public string GetBearerToken(int tenantId, string actorType) => _tokens[(tenantId, actorType)];
 
     public int GetCredentialId(int tenantId, string actorType) => _credentialIds[(tenantId, actorType)];
+
+    public string GetPortalAdminToken(int tenantId, int userId)
+    {
+        using var scope = Factory.Services.CreateScope();
+        var issuer = scope.ServiceProvider.GetRequiredService<IAccessTokenIssuer>();
+        return issuer.Issue(new AuthenticatedActor(
+            tenantId,
+            GetCredentialId(tenantId, "HUMAN"),
+            ProjectActorType.Human,
+            userId,
+            "integration-portal-login",
+            AuraJwtClaimTypes.PortalLogin)).AccessToken;
+    }
 
     public void AddBearer(HttpRequestMessage request, int tenantId, string actorType) =>
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", GetBearerToken(tenantId, actorType));
@@ -193,7 +258,7 @@ public sealed class ProjectControlDatabaseFixture : IAsyncLifetime
         await connection.OpenAsync();
 
         await using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM AgentCredential WHERE idTenant IN (@t1, @t2);";
+        command.CommandText = "DELETE FROM AgentCredentialProject WHERE idTenant IN (@t1, @t2); DELETE FROM AgentCredential WHERE idTenant IN (@t1, @t2); DELETE FROM AuraAdminAudit WHERE idTenant IN (@t1, @t2);";
         command.Parameters.AddWithValue("@t1", PrimaryTenantId);
         command.Parameters.AddWithValue("@t2", SecondaryTenantId);
         await command.ExecuteNonQueryAsync();
@@ -208,6 +273,9 @@ public sealed class ProjectControlDatabaseFixture : IAsyncLifetime
         command.CommandText =
             """
             SET QUOTED_IDENTIFIER ON;
+            DELETE FROM AgentRegistrationEvent WHERE idTenant IN (@t1, @t2);
+            DELETE FROM AgentCredentialProject WHERE idTenant IN (@t1, @t2);
+            DELETE FROM AuraAdminAudit WHERE idTenant IN (@t1, @t2);
             DELETE FROM ProProyectoRoadmapRevision WHERE idTenant IN (@t1, @t2);
             DELETE FROM ProProyectosItems WHERE idTenant IN (@t1, @t2);
             DELETE FROM ProProyectoEtapa WHERE idTenant IN (@t1, @t2);
@@ -319,7 +387,48 @@ public sealed class ProjectControlDatabaseFixture : IAsyncLifetime
         await command.ExecuteNonQueryAsync();
     }
 
+    public async Task<(int Items, int Leases, int Execs, int Stages, int RoadmapRevisions)> GetGovernedRowCountsAsync(
+        int tenantId,
+        int projectId)
+    {
+        await using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT
+                (SELECT COUNT(*) FROM ProProyectosItems WHERE idTenant = @tenantId AND IdProyecto = @projectId),
+                (SELECT COUNT(*) FROM ProProyectosItems WHERE idTenant = @tenantId AND IdProyecto = @projectId AND LeaseId IS NOT NULL),
+                (SELECT COUNT(*) FROM ProProyectoEXEC WHERE idTenant = @tenantId AND IdProyecto = @projectId),
+                (SELECT COUNT(*) FROM ProProyectoEtapa WHERE idTenant = @tenantId AND IdProyecto = @projectId),
+                (SELECT COUNT(*) FROM ProProyectoRoadmapRevision WHERE idTenant = @tenantId AND IdProyecto = @projectId);
+            """;
+        command.Parameters.AddWithValue("@tenantId", tenantId);
+        command.Parameters.AddWithValue("@projectId", projectId);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3), reader.GetInt32(4));
+    }
+
     public async Task<int> CreateProjectAsync(int tenantId, string code, string name, byte status = 1)
+    {
+        var projectId = await CreateProjectRawAsync(tenantId, code, name, status);
+        if (_credentialIds.TryGetValue((tenantId, "INGESTION"), out var credentialId) && status == 1)
+        {
+            using var assignment = new HttpRequestMessage(HttpMethod.Post, $"/api/admin/agent-credentials/{credentialId}/projects")
+            {
+                Content = JsonContent.Create(new { tenantId, projectId }, options: JsonOptions),
+            };
+            assignment.Headers.Add("X-Admin-Api-Key", AdminApiKeyFilter.DevelopmentOnlyPlaceholder);
+            var response = await _bootstrapClient.SendAsync(assignment);
+            response.EnsureSuccessStatusCode();
+        }
+        return projectId;
+    }
+
+    private async Task<int> CreateProjectRawAsync(int tenantId, string code, string name, byte status = 1)
     {
         await using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync();
@@ -339,8 +448,30 @@ public sealed class ProjectControlDatabaseFixture : IAsyncLifetime
         command.Parameters.AddWithValue("@name", name);
         command.Parameters.AddWithValue("@code", code);
         command.Parameters.AddWithValue("@status", status);
+        return (int)(await command.ExecuteScalarAsync())!;
+    }
 
-        var result = await command.ExecuteScalarAsync();
-        return (int)result!;
+    private sealed class CapturingLoggerProvider(ConcurrentQueue<string> logs) : ILoggerProvider
+    {
+        public ILogger CreateLogger(string categoryName) => new CapturingLogger(categoryName, logs);
+        public void Dispose() { }
+    }
+
+    private sealed class CapturingLogger(string categoryName, ConcurrentQueue<string> logs) : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (formatter is null) return;
+            var message = formatter(state, exception);
+            logs.Enqueue(exception is null ? $"{categoryName}: {message}" : $"{categoryName}: {message} {exception}");
+        }
+    }
+
+    private sealed class NullScope : IDisposable
+    {
+        public static NullScope Instance { get; } = new();
+        public void Dispose() { }
     }
 }

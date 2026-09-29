@@ -1,13 +1,14 @@
 ```text
 STATUS: LEGACY_COMPATIBILITY_POINTER
-NORMATIVE OPERATIONAL PROTOCOL: AURA_PROTOCOL v2.2 (docs/aura/AURA_PROTOCOL_v2.2.md)
+NORMATIVE OPERATIONAL PROTOCOL: AURA Agent Registration Protocol v2.3 (docs/aura/AURA_AGENT_REGISTRATION_PROTOCOL_v2.3.md); GOVERNED_EXECUTION remains AURA_PROTOCOL v2.2 (docs/aura/AURA_PROTOCOL_v2.2.md)
 PROJECT MEMORY: AURA_PROJECT_MEMORY v1.0 (docs/aura/AURA_PROJECT_MEMORY_v1.0.md)
 AGENT INTEGRATION CONTRACT: AURA_AGENT_CONTRACT v1.0 (docs/aura/AURA_AGENT_CONTRACT_v1.0.md)
 ```
 
 > Este archivo es únicamente un puntero de compatibilidad para herramientas que todavía lo descubren. No es una
 > especificación normativa y el contenido legacy inferior no prevalece ni debe interpretarse como protocolo vigente.
-> Las fuentes normativas actuales son `docs/aura/AURA_PROTOCOL_v2.2.md`, `docs/aura/AURA_PROJECT_MEMORY_v1.0.md`
+> Las fuentes normativas actuales son `docs/aura/AURA_AGENT_REGISTRATION_PROTOCOL_v2.3.md`,
+> `docs/aura/AURA_PROTOCOL_v2.2.md` para `GOVERNED_EXECUTION`, `docs/aura/AURA_PROJECT_MEMORY_v1.0.md`
 > y `docs/aura/AURA_AGENT_CONTRACT_v1.0.md`. La versión operativa se descubre mediante `GET /api/aura-protocol`
 > y el documento indicado por `sourceDocument`, conforme a `docs/aura/PROTOCOL_VERSIONING.md`. Project Memory se
 > descubre mediante `.aura/project.json` y sus documentos Core. Ante cualquier contradicción, prevalecen siempre las
@@ -48,7 +49,8 @@ No registrar comandos internos, exploraciones menores ni acciones sin impacto fu
 - API: `http://localhost:5235`
 - Salud: `GET http://localhost:5235/health`
 - Tablero: `GET http://localhost:5235/api/project-control?tenantId=1`
-- Registro: `POST http://localhost:5235/api/project-control/events`
+- Registro gobernado: `POST http://localhost:5235/api/project-control/events`
+- Registro append-only v2.3: `POST http://localhost:5235/api/agent-registration/events`
 
 Usar exclusivamente la API del puerto `5235`.
 

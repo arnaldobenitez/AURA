@@ -21,7 +21,7 @@ AURA_PROJECT_MEMORY  =  qué conocimiento se guarda en el proyecto
 AURA_PROTOCOL        =  autoridad operacional, autenticación, leases, eventos
 ```
 
-Project Memory y este contrato funcionan **sin API**, **sin red** y **sin Git**. `AURA_PROTOCOL` se consulta cuando está disponible y cuando el rol lo requiera, pero nunca se infiere de Project Memory.
+Project Memory y este contrato funcionan **sin API**, **sin red** y **sin Git**. `AURA_PROTOCOL` se consulta cuando está disponible y cuando el rol lo requiera, pero nunca se infiere de Project Memory. Cuando el objetivo sea solamente registrar evolución durable, el canal compatible es `REGISTRATION_ONLY` de `AURA Agent Registration Protocol v2.3` con credencial técnica `INGESTION` asociada al proyecto activo; las credenciales legacy `LEGACY_TENANT_WIDE` se mantienen solo durante transición. Ese registro no otorga ni presume autoridad de `GOVERNED_EXECUTION`.
 
 ## 3. Descubrimiento
 

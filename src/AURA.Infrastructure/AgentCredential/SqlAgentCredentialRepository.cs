@@ -32,10 +32,12 @@ public sealed class SqlAgentCredentialRepository(AuraDbContext dbContext) : IAge
                 """
                 INSERT INTO dbo.AgentCredential
                     (idTenant, IdCredential, nActorTipo, sAgentName, LinkedActorId,
-                     SecretSalt, SecretHash, SecretIterations, CreatedAtUtc, RevokedAtUtc, LastUsedAtUtc, RotatedFromCredentialId)
+                     SecretSalt, SecretHash, SecretIterations, CreatedAtUtc, RevokedAtUtc, LastUsedAtUtc, RotatedFromCredentialId,
+                     ScopeMode, ExpiresAtUtc, CreatedByUserId, UpdatedAtUtc, UpdatedByUserId)
                 VALUES
                     (@tenantId, @credentialId, @actorType, @agentName, @linkedActorId,
-                     @secretSalt, @secretHash, @secretIterations, @createdAtUtc, NULL, NULL, @rotatedFromCredentialId);
+                     @secretSalt, @secretHash, @secretIterations, @createdAtUtc, NULL, NULL, @rotatedFromCredentialId,
+                     CASE WHEN @actorType = 4 THEN 'LEGACY_TENANT_WIDE' ELSE 'NOT_APPLICABLE' END, NULL, @createdBy, @createdAtUtc, @createdBy);
                 """;
             var parameters = insertCommand.Parameters;
             parameters.AddWithValue("@tenantId", record.TenantId);
@@ -48,8 +50,16 @@ public sealed class SqlAgentCredentialRepository(AuraDbContext dbContext) : IAge
             parameters.AddWithValue("@secretIterations", record.SecretIterations);
             parameters.AddWithValue("@createdAtUtc", record.CreatedAtUtc);
             parameters.Add("@rotatedFromCredentialId", SqlDbType.Int).Value = (object?)record.RotatedFromCredentialId ?? DBNull.Value;
+            parameters.Add("@createdBy", SqlDbType.Int).Value = (object?)record.CreatedByUserId ?? DBNull.Value;
 
             await insertCommand.ExecuteNonQueryAsync(cancellationToken);
+            await using var auditCommand = connection.CreateCommand();
+            auditCommand.Transaction = sqlTransaction;
+            auditCommand.CommandText = "INSERT INTO dbo.AuraAdminAudit (idTenant, OperationCode, TargetType, TargetId, ActorUserId, OccurredAtUtc) VALUES (@tenantId, 'AGENT_CREDENTIAL_CREATED', 'AGENT_CREDENTIAL', @targetId, @actor, SYSUTCDATETIME());";
+            auditCommand.Parameters.AddWithValue("@tenantId", record.TenantId);
+            auditCommand.Parameters.AddWithValue("@targetId", nextId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            auditCommand.Parameters.Add("@actor", SqlDbType.Int).Value = (object?)record.CreatedByUserId ?? DBNull.Value;
+            await auditCommand.ExecuteNonQueryAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return nextId;
         }
@@ -68,7 +78,7 @@ public sealed class SqlAgentCredentialRepository(AuraDbContext dbContext) : IAge
             await using var command = connection.CreateCommand();
             command.CommandText =
                 """
-                SELECT nActorTipo, sAgentName, LinkedActorId, SecretSalt, SecretHash, SecretIterations, RevokedAtUtc
+                SELECT nActorTipo, sAgentName, LinkedActorId, SecretSalt, SecretHash, SecretIterations, RevokedAtUtc, ExpiresAtUtc, ScopeMode
                 FROM dbo.AgentCredential
                 WHERE idTenant = @tenantId AND IdCredential = @credentialId;
                 """;
@@ -90,7 +100,9 @@ public sealed class SqlAgentCredentialRepository(AuraDbContext dbContext) : IAge
                 (byte[])reader[3],
                 (byte[])reader[4],
                 reader.GetInt32(5),
-                reader.IsDBNull(6) ? null : reader.GetDateTime(6));
+                reader.IsDBNull(6) ? null : reader.GetDateTime(6),
+                reader.IsDBNull(7) ? null : reader.GetDateTime(7),
+                reader.GetString(8));
         }
         finally
         {

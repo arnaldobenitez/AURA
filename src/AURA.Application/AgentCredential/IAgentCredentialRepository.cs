@@ -12,7 +12,8 @@ public sealed record NewAgentCredentialRecord(
     byte[] SecretHash,
     int SecretIterations,
     DateTime CreatedAtUtc,
-    int? RotatedFromCredentialId);
+    int? RotatedFromCredentialId,
+    int? CreatedByUserId = null);
 
 public sealed record AgentCredentialAuthRecord(
     int TenantId,
@@ -23,7 +24,9 @@ public sealed record AgentCredentialAuthRecord(
     byte[] SecretSalt,
     byte[] SecretHash,
     int SecretIterations,
-    DateTime? RevokedAtUtc);
+    DateTime? RevokedAtUtc,
+    DateTime? ExpiresAtUtc = null,
+    string ScopeMode = "LEGACY_TENANT_WIDE");
 
 public interface IAgentCredentialRepository
 {

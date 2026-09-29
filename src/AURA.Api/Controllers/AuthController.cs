@@ -25,8 +25,8 @@ public sealed class AuthController(AgentCredentialService agentCredentialService
         {
             IssueAccessTokenStatus.Issued => Ok(new AccessTokenResponse(result.AccessToken!, result.ExpiresAtUtc!.Value)),
             IssueAccessTokenStatus.Revoked => Problem(
-                title: "Credencial revocada.",
-                detail: "Esta credencial fue revocada y ya no puede emitir tokens.",
+                title: "Credencial no activa.",
+                detail: "Esta credencial fue revocada o expiró y ya no puede emitir tokens.",
                 statusCode: StatusCodes.Status401Unauthorized),
             IssueAccessTokenStatus.InvalidCredential => Problem(
                 title: "Credencial inválida.",

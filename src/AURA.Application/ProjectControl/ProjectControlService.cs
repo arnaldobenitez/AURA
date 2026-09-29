@@ -214,6 +214,11 @@ public sealed class ProjectControlService(IProjectControlRepository repository, 
             return "La credencial autenticada no pertenece a este tenantId.";
         }
 
+        if (authenticatedActor.ActorType == ProjectActorType.Ingestion)
+        {
+            return "Una credencial INGESTION sólo puede usar el canal REGISTRATION_ONLY.";
+        }
+
         if (actorType != authenticatedActor.ActorType)
         {
             return $"La credencial autenticada es {authenticatedActor.ActorType}; no puede registrar un evento como actor.type '{ProjectControlCodes.ToCode(actorType)}'.";
@@ -445,7 +450,8 @@ public sealed class ProjectControlService(IProjectControlRepository repository, 
 
     public async Task<CreateProjectResult> CreateProjectAsync(
         CreateProjectRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int? createdByUserId = null)
     {
         var errors = ValidateCreateProject(request, out var code, out var status);
 
@@ -462,7 +468,8 @@ public sealed class ProjectControlService(IProjectControlRepository repository, 
             NullIfWhiteSpace(request.WorkingPath),
             NullIfWhiteSpace(request.Repository),
             status,
-            request.HumanResponsibleId);
+            request.HumanResponsibleId,
+            createdByUserId);
 
         var outcome = await repository.CreateProjectAsync(command, cancellationToken);
 

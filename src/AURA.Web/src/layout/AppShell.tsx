@@ -7,12 +7,14 @@ interface AppShellProps {
   onNavigate?: (path: string) => void;
   session?: StoredSession | null;
   onLogout?: () => void;
+  isAdmin?: boolean;
+  activePath?: string;
 }
 
-export function AppShell({ children, onNavigate, session, onLogout }: AppShellProps) {
+export function AppShell({ children, onNavigate, session, onLogout, isAdmin, activePath }: AppShellProps) {
   return (
     <div className="app-shell">
-      <Sidebar onNavigate={onNavigate} />
+      <Sidebar onNavigate={onNavigate} isAdmin={isAdmin} activePath={activePath} />
       <div className="app-shell__content">
         {session ? (
           <div className="session-bar">

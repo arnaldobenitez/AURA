@@ -342,6 +342,15 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
             var nextProjectId = await GetNextProjectIdAsync(connection, sqlTransaction, command.TenantId, cancellationToken);
 
             await InsertProjectAsync(connection, sqlTransaction, command, nextProjectId, cancellationToken);
+            await using (var audit = connection.CreateCommand())
+            {
+                audit.Transaction = sqlTransaction;
+                audit.CommandText = "INSERT INTO dbo.AuraAdminAudit (idTenant, OperationCode, TargetType, TargetId, ActorUserId, OccurredAtUtc) VALUES (@tenantId, 'PROJECT_CREATED', 'PROJECT', @targetId, @actor, SYSUTCDATETIME());";
+                audit.Parameters.AddWithValue("@tenantId", command.TenantId);
+                audit.Parameters.AddWithValue("@targetId", nextProjectId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                audit.Parameters.Add("@actor", SqlDbType.Int).Value = (object?)command.CreatedByUserId ?? DBNull.Value;
+                await audit.ExecuteNonQueryAsync(cancellationToken);
+            }
 
             await transaction.CommitAsync(cancellationToken);
             return new CreateProjectOutcome(CreateProjectOutcomeStatus.Created, nextProjectId);
@@ -894,9 +903,11 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
         insertCommand.CommandText =
             """
             INSERT INTO dbo.ProProyectosCabecera
-                (idTenant, IdProyecto, sNombre, sDescripcion, dFecCreacion, sPathTrabajo, nEstado, sCodigo, sRepositorio, nHumanoResponsable)
+                (idTenant, IdProyecto, sNombre, sDescripcion, dFecCreacion, sPathTrabajo, nEstado, sCodigo, sRepositorio, nHumanoResponsable,
+                 dFecModificacion, nUsuarioCreador, nUsuarioModificacion)
             VALUES
-                (@tenantId, @projectId, @name, @description, CAST(SYSUTCDATETIME() AS date), @workingPath, @status, @code, @repository, @humanResponsibleId);
+                (@tenantId, @projectId, @name, @description, CAST(SYSUTCDATETIME() AS date), @workingPath, @status, @code, @repository, @humanResponsibleId,
+                 SYSUTCDATETIME(), @createdBy, @createdBy);
             """;
 
         var parameters = insertCommand.Parameters;
@@ -909,6 +920,7 @@ public sealed class SqlProjectControlRepository(AuraDbContext dbContext) : IProj
         parameters.AddWithValue("@code", command.ProjectCode);
         parameters.Add("@repository", SqlDbType.NVarChar).Value = (object?)command.Repository ?? DBNull.Value;
         parameters.Add("@humanResponsibleId", SqlDbType.Int).Value = (object?)command.HumanResponsibleId ?? DBNull.Value;
+        parameters.Add("@createdBy", SqlDbType.Int).Value = (object?)command.CreatedByUserId ?? DBNull.Value;
 
         await insertCommand.ExecuteNonQueryAsync(cancellationToken);
     }

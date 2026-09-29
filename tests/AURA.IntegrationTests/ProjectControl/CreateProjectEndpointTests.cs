@@ -30,7 +30,7 @@ public sealed class CreateProjectEndpointTests(ProjectControlDatabaseFixture fix
         {
             Content = JsonContent.Create(request, options: JsonOptions),
         };
-        fixture.AddBearer(httpRequest, tenantId, "CODER");
+        fixture.AddBearer(httpRequest, fixture.GetPortalAdminToken(tenantId, 1));
         return await fixture.Client.SendAsync(httpRequest);
     }
 

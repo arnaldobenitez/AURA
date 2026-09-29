@@ -12,7 +12,7 @@ const lastUpdatedFormatter = new Intl.DateTimeFormat("es-AR", { dateStyle: "medi
 const TENANT_ID = 1;
 const HIGHLIGHT_DURATION_MS = 4_000;
 
-export function ProjectControlPage({ onProjectSelect }: { onProjectSelect: (project: ProjectControlProject) => void }) {
+export function ProjectControlPage({ onProjectSelect, canManageProjects = false }: { onProjectSelect: (project: ProjectControlProject) => void; canManageProjects?: boolean }) {
   const { board, isLoading, error, lastUpdated, refresh } = useProjectControlBoard();
   const { soundEnabled, setSoundEnabled, needsAudioUnlock, unlockAudio } = useProjectControlAlerts(board);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -46,14 +46,14 @@ export function ProjectControlPage({ onProjectSelect }: { onProjectSelect: (proj
           >
             {soundEnabled ? "🔊" : "🔇"}
           </button>
-          <button
+          {canManageProjects ? <button
             type="button"
             className="pc-sound-toggle"
             onClick={() => setIsCreateModalOpen(true)}
             title="Nuevo proyecto"
           >
             +
-          </button>
+          </button> : null}
           <button type="button" className="pc-refresh-button" onClick={() => void refresh()} disabled={isLoading}>
             {isLoading ? "Actualizando…" : "Actualizar"}
           </button>
@@ -94,12 +94,12 @@ export function ProjectControlPage({ onProjectSelect }: { onProjectSelect: (proj
         )}
       </main>
 
-      <CreateProjectModal
+      {canManageProjects ? <CreateProjectModal
         open={isCreateModalOpen}
         tenantId={TENANT_ID}
         onClose={() => setIsCreateModalOpen(false)}
         onCreated={handleProjectCreated}
-      />
+      /> : null}
       <RoadmapModal
         open={roadmapProject !== null}
         projectCode={roadmapProject?.projectCode ?? null}

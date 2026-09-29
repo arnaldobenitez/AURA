@@ -68,7 +68,9 @@ npm run dev
 - Liveness (proceso activo, no depende de SQL Server): `http://localhost:5235/health` y `http://localhost:5235/health/live`
 - Readiness (incluye conectividad SQL Server y estado de migraciones): `http://localhost:5235/health/ready`
 - Control de proyectos IA (lectura): `http://localhost:5235/api/project-control?tenantId=1`
-- Control de proyectos IA (registrar evento): `POST http://localhost:5235/api/project-control/events`
+- Control de proyectos IA (evento gobernado): `POST http://localhost:5235/api/project-control/events`
+- Registro append-only v2.3: `POST http://localhost:5235/api/agent-registration/events`
+- Read-back append-only v2.3: `GET http://localhost:5235/api/agent-registration/events/{eventId}?tenantId=1`
 - OpenAPI (sólo en Development): `http://localhost:5235/openapi/v1.json`
 - Frontend — Control de proyectos IA (pantalla principal, ruta `/`): `http://localhost:5173`
 
@@ -146,11 +148,19 @@ La ruta raíz (`/`) muestra **Control de proyectos IA**: una grilla con el estad
 
 `nHumano` es el humano que ejecutó el evento (cuando `nActorTipo = HUMAN`); `nControlId` con `nControlTipo = HUMAN` es el humano que debe continuar. Son roles distintos y nunca se pisan entre sí.
 
-Aplicar el esquema (aditivo, idempotente; nunca borra ni recrea nada) y sembrar los 6 proyectos del tenant 1:
+Aplicar el esquema completo (aditivo e idempotente) y los datos iniciales de ProjectControl; el modo completo también puede sembrar el login humano por defecto si aún no está configurado. Revisar sus efectos antes de usarlo en un servidor compartido. Para sólo DDL, usar `-SchemaOnly` como se indica abajo:
 
 ```powershell
-.\scripts\project-control-schema-update.ps1
+.\scripts\project-control-schema-update.ps1 -BackupVerified
 ```
+
+Para aplicar únicamente el esquema en un servidor interno aprobado, sin semillas de datos, usar la variable de entorno temporal `AURA_SCHEMA_MIGRATION_CONNSTR` y validar el destino explícitamente:
+
+```powershell
+.\scripts\project-control-schema-update.ps1 -SchemaOnly -TargetServer <servidor-aprobado> -BackupVerified
+```
+
+El modo `SchemaOnly` exige base `AURA`, coincidencia de `-TargetServer`, backup previamente verificado y el switch explícito `-BackupVerified`; aplica/verifica DDL en transacción y no usa User Secrets, `appsettings.json` ni siembra proyectos/usuarios. También agrega `AgentRegistrationEvent`, `AgentCredentialProject` y `AuraAdminAudit`; nunca se aplica al iniciar la API. El operador debe revisar el script/migrador y ejecutar postchecks antes de un despliegue controlado.
 
 ### Endpoints
 
@@ -158,20 +168,24 @@ Aplicar el esquema (aditivo, idempotente; nunca borra ni recrea nada) y sembrar 
 - `POST /api/project-control/events`: registra un evento nuevo. Requiere autenticación, es idempotente por `eventId` y usa `expectedPreviousItemId` como control optimista. `PROGRESS` de un Roadmap debe identificar `stageCode` y porcentaje. La aprobación formal de una etapa planificada requiere `AI_ANALYST` designado, `stageOutcome` y evidencia; `PASS_WITH_WARNINGS` cuenta como hito cerrado.
 - `GET /api/project-control/projects/{projectCode}/roadmap?tenantId=1`: devuelve las etapas ordenadas, progreso individual, estado, validador asignado y última revisión.
 - `PUT /api/project-control/projects/{projectCode}/roadmap`: define/actualiza el plan del EXEC vigente. Requiere credencial `HUMAN`, asigna una credencial activa `AI_ANALYST` a cada etapa y registra una revisión auditable.
+- `POST /api/agent-registration/events`: registra un evento `REGISTRATION_ONLY` append-only e idempotente por `eventId`. Requiere JWT de credencial `INGESTION` activa y scope del proyecto; nuevas credenciales solo escriben a proyectos activos asignados. `PROVISIONAL` queda para credenciales legacy `LEGACY_TENANT_WIDE` durante transición.
+- `GET /api/agent-registration/events/{eventId}?tenantId=1`: read-back del mismo tenant y scope activo. Devuelve `identityStatus=UNVERIFIED` y `projectResolution`.
 
-### Autenticación, concurrencia y Roadmap de agentes (AURA_PROTOCOL v2.2)
+### Autenticación, concurrencia y registro de agentes (AURA_PROTOCOL v2.3)
 
-`POST /api/project-control/events` y `POST /api/project-control/projects` exigen un JWT (`Authorization: Bearer <token>`), obtenido en `POST /api/auth/token` a partir de una credencial (`AgentCredential`: `credentialId` + secreto). Las credenciales se administran vía `/api/admin/agent-credentials` (crear/rotar/revocar/listar), protegido por el header `X-Admin-Api-Key`. Ver `docs/aura/AURA_PROTOCOL_v2.2.md` y `docs/aura/AGENT_INTEGRATION.md` para el detalle completo (claims del JWT, modelo de lease/concurrencia, códigos de respuesta).
+`POST /api/project-control/events` exige JWT (`Authorization: Bearer <token>`) obtenido de credencial. La ruta legacy `POST /api/project-control/projects` y el ABM `/api/admin/projects` requieren JWT humano de portal con `PORTAL_LOGIN` y rol configurado en `Admin:TenantAdminUserIds:<tenantId>`. `/api/admin/agent-credentials` permite el ABM humano; `X-Admin-Api-Key` permanece solo para clientes backend y no se expone al navegador. Ver `docs/aura/AGENT_INTEGRATION.md`.
+
+`AURA Agent Registration Protocol v2.3` agrega `actorType=INGESTION` para canales/aplicaciones. Las credenciales nuevas requieren scope explícito por proyecto y la autorización se revalida por operación, incluido read-back; credenciales tenant-wide preexistentes se marcan legacy para transición. El JWT no adquiere leases ni autoridad gobernada. La identidad declarada se persiste como `UNVERIFIED` y los eventos rechazan secretos, JWT, passwords, connection strings, claves Admin, tokens ARCA y claves privadas. Ver `docs/aura/AURA_AGENT_REGISTRATION_PROTOCOL_v2.3.md`.
 
 ### Login básico del tablero web (2026-08-28)
 
-`AURA.Web` ahora exige iniciar sesión antes de mostrar cualquier cosa: `POST /api/auth/login` (`email` + `password`, tenant fijo en `1`) devuelve el mismo tipo de JWT que un `AgentCredential`, con `actorType = HUMAN`. Por eso `GET /api/project-control` y su historial también quedaron protegidos por `[Authorize]` — ya no son anónimos. Sin roles/permisos internos todavía: cualquier login válido ve todo igual (ver `docs/aura/AURA_PROTOCOL_v2.2.md` §2). `Usuarios` ganó `sEmail`/`sPasswordSalt`/`sPasswordHash`/`nPasswordIterations` (aditivo, nullable); el usuario `IdUsuario=1` del tenant `1` se siembra una sola vez con un login por defecto (nunca se pisa si ya tiene email configurado).
+`AURA.Web` usa `POST /api/auth/login` (`email` + `password`, tenant fijo en `1`) y recibe un JWT humano marcado `aura:authSource=PORTAL_LOGIN`. Las lecturas normales siguen protegidas por Bearer JWT. El acceso al ABM requiere además que el ID humano figure en `Admin:TenantAdminUserIds:<tenantId>`; login válido por sí solo no concede privilegios administrativos. Los JWT de credenciales técnicas `HUMAN` no tienen el origen `PORTAL_LOGIN` y no pueden usar el ABM.
 
 ### Frontend
 
-`src/AURA.Web/src/features/project-control/` contiene la pantalla: encabezado con indicador de salud compacto, tarjetas de resumen, y la grilla. Se actualiza sola al abrir, cada 30 s (pausada cuando la pestaña no está visible), y con el botón "Actualizar"; una falla de refresco muestra un aviso pero conserva los últimos datos válidos en pantalla. Sigue leyendo el tablero de forma anónima (no requiere login).
+`src/AURA.Web/src/features/project-control/` contiene la pantalla: encabezado con indicador de salud compacto, tarjetas de resumen, y la grilla. Se actualiza sola al abrir, cada 30 s (pausada cuando la pestaña no está visible), y con el botón "Actualizar"; una falla de refresco muestra un aviso pero conserva los últimos datos válidos en pantalla. Requiere sesión humana; el contrato TypeScript reconoce `INGESTION` como tipo de credencial aunque el tablero sigue mostrando únicamente eventos gobernados.
 
 ## Política de secretos
 
-Nunca versionar credenciales, cadenas de conexión, claves ni tokens en este repositorio. La configuración sensible debe cargarse mediante variables de entorno o un secret store (por ejemplo, .NET User Secrets en desarrollo), nunca en `appsettings*.json` ni en archivos versionados. `.gitignore` excluye `.env*` (salvo `.env.example`) por la misma razón. `Jwt:SigningKey` y `Admin:ApiKey` siguen la misma convención que `ConnectionStrings:DefaultConnection`: User Secrets en desarrollo, editado a mano en el `appsettings.json` desplegado en producción — nunca comiteados en ningún `appsettings*.json`. Si falta configuración explícita y el entorno es `Development`, la API usa un placeholder fijo definido en código (nunca en un archivo versionado), explícitamente no apto para producción; fuera de `Development` la API rechaza arrancar sin configuración real.
+Nunca versionar credenciales, cadenas de conexión, claves ni tokens en este repositorio. La configuración sensible debe cargarse mediante variables de entorno o un secret store (por ejemplo, .NET User Secrets en desarrollo), nunca en `appsettings*.json` ni en archivos versionados. `.gitignore` excluye `.env*` (salvo `.env.example`) por la misma razón. `Jwt:SigningKey` sigue siendo requerido fuera de Development. `Admin:ApiKey` es opcional y se reserva para compatibilidad server-to-server; nunca se configura en el frontend. La autorización de portal se provisiona por `Admin:TenantAdminUserIds:<tenantId>` en configuración segura. Todos los valores sensibles se suministran externamente y no se versionan.
 test change

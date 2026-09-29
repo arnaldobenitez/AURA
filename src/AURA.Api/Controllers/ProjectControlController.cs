@@ -119,12 +119,19 @@ public sealed class ProjectControlController(ProjectControlService projectContro
         };
     }
 
+    [Authorize(Policy = "AuraTenantAdmin")]
     [HttpPost("projects")]
     public async Task<IActionResult> CreateProject(
         [FromBody] CreateProjectRequest request,
         CancellationToken cancellationToken)
     {
-        var result = await projectControlService.CreateProjectAsync(request, cancellationToken);
+        var actor = GetAuthenticatedActor();
+        if (actor.TenantId != request.TenantId)
+        {
+            return Forbid();
+        }
+
+        var result = await projectControlService.CreateProjectAsync(request, cancellationToken, actor.LinkedActorId);
 
         switch (result.Status)
         {

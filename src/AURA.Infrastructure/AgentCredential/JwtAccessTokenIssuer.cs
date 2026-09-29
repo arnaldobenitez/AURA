@@ -36,6 +36,10 @@ public sealed class JwtAccessTokenIssuer(IOptions<JwtOptions> options) : IAccess
         {
             claims.Add(new Claim(AuraJwtClaimTypes.LinkedActorId, linkedActorId.ToString()));
         }
+        if (!string.IsNullOrWhiteSpace(actor.AuthenticationSource))
+        {
+            claims.Add(new Claim(AuraJwtClaimTypes.AuthenticationSource, actor.AuthenticationSource));
+        }
 
         var signingKeyBytes = ResolveSigningKeyBytes(jwtOptions.SigningKey);
         var credentials = new SigningCredentials(new SymmetricSecurityKey(signingKeyBytes), SecurityAlgorithms.HmacSha256);

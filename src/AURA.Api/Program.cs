@@ -2,6 +2,7 @@ using AURA.Api.Correlation;
 using AURA.Api.Diagnostics;
 using AURA.Infrastructure;
 using AURA.Infrastructure.AgentCredential;
+using Microsoft.AspNetCore.Authorization;
 using AURA.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -68,7 +69,12 @@ builder.Services
             ClockSkew = TimeSpan.FromSeconds(30),
         };
     });
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("AuraTenantAdmin", policy =>
+        policy.RequireAuthenticatedUser().AddRequirements(new AURA.Api.Admin.TenantAdminRequirement()));
+});
+builder.Services.AddScoped<IAuthorizationHandler, AURA.Api.Admin.TenantAdminAuthorizationHandler>();
 builder.Services.AddScoped<AURA.Api.Admin.AdminApiKeyFilter>();
 
 if (builder.Environment.IsDevelopment())
@@ -92,9 +98,15 @@ if (builder.Environment.IsDevelopment())
 
 var app = builder.Build();
 
-// Explicit, one-off administrative command. Never runs as part of normal startup/app.Run(),
-// matching the "no automatic migration" rule already used for AuraDbContext. Invoked via
-// scripts/project-control-schema-update.ps1.
+// Explicit, one-off administrative commands. Never run as part of normal startup/app.Run().
+if (args.Contains("--apply-project-control-schema-only"))
+{
+    using var scope = app.Services.CreateScope();
+    var migrator = scope.ServiceProvider.GetRequiredService<AURA.Infrastructure.ProjectControl.IProjectControlSchemaMigrator>();
+    await migrator.ApplySchemaOnlyAsync(CancellationToken.None);
+    return;
+}
+
 if (args.Contains("--apply-project-control-schema"))
 {
     using var scope = app.Services.CreateScope();

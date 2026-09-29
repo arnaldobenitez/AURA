@@ -22,4 +22,6 @@ public static class AuraJwtClaimTypes
     public const string ActorType = "aura:actorType";
     public const string LinkedActorId = "aura:linkedActorId";
     public const string AgentName = "aura:agentName";
+    public const string AuthenticationSource = "aura:authSource";
+    public const string PortalLogin = "PORTAL_LOGIN";
 }

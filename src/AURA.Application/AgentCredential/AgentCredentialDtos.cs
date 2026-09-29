@@ -6,7 +6,8 @@ public sealed record CreateAgentCredentialRequest(
     int TenantId,
     string ActorType,
     string AgentName,
-    int? LinkedActorId);
+    int? LinkedActorId,
+    IReadOnlyList<int>? ProjectIds = null);
 
 public enum CreateAgentCredentialStatus
 {
@@ -67,4 +68,5 @@ public sealed record AuthenticatedActor(
     int CredentialId,
     ProjectActorType ActorType,
     int? LinkedActorId,
-    string AgentName);
+    string AgentName,
+    string? AuthenticationSource = null);

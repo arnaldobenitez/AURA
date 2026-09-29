@@ -10,7 +10,7 @@ export type ProjectEventTypeCode =
   | "COMPLETION"
   | "DEPLOYMENT";
 export type ProjectWorkStatusCode = "IN_PROGRESS" | "BLOCKED" | "COMPLETED";
-export type ProjectActorTypeCode = "UNASSIGNED" | "HUMAN" | "AI_ANALYST" | "CODER";
+export type ProjectActorTypeCode = "UNASSIGNED" | "HUMAN" | "AI_ANALYST" | "CODER" | "INGESTION";
 // Texto libre, sin enum cerrado: nuevos agentes/entornos (Antigravity, Windsurf, Devin,
 // Codex Desktop, etc.) no deben requerir recompilar el frontend.
 export type ProjectAgentCode = string;

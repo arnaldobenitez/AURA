@@ -1,10 +1,14 @@
+using AURA.Application.Admin;
 using AURA.Application.AgentCredential;
 using AURA.Application.HumanLogin;
 using AURA.Application.ProjectControl;
+using AURA.Application.Registration;
+using AURA.Infrastructure.Admin;
 using AURA.Infrastructure.AgentCredential;
 using AURA.Infrastructure.HumanLogin;
 using AURA.Infrastructure.Persistence;
 using AURA.Infrastructure.ProjectControl;
+using AURA.Infrastructure.Registration;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -39,7 +43,12 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.AddScoped<IProjectControlRepository, SqlProjectControlRepository>();
         services.AddScoped<ProjectControlService>();
+        services.AddScoped<IAdminManagementRepository, SqlAdminManagementRepository>();
+        services.AddScoped<AdminManagementService>();
         services.AddScoped<IProjectControlSchemaMigrator, ProjectControlSchemaMigrator>();
+
+        services.AddScoped<IRegistrationEventRepository, SqlRegistrationEventRepository>();
+        services.AddScoped<RegistrationEventService>();
 
         services.AddScoped<IAgentCredentialRepository, SqlAgentCredentialRepository>();
         services.AddScoped<IAccessTokenIssuer, JwtAccessTokenIssuer>();

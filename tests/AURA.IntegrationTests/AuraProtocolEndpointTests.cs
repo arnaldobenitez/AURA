@@ -20,18 +20,27 @@ public class AuraProtocolEndpointTests(WebApplicationFactory<Program> factory) :
         var payload = await response.Content.ReadFromJsonAsync<JsonElement>();
 
         Assert.Equal("AURA_PROTOCOL", payload.GetProperty("protocolName").GetString());
-        Assert.Equal("2.2", payload.GetProperty("version").GetString());
+        Assert.Equal("2.3", payload.GetProperty("version").GetString());
         Assert.False(string.IsNullOrWhiteSpace(payload.GetProperty("status").GetString()));
-        Assert.False(string.IsNullOrWhiteSpace(payload.GetProperty("sourceDocument").GetString()));
+        Assert.Equal("docs/aura/AURA_AGENT_REGISTRATION_PROTOCOL_v2.3.md", payload.GetProperty("sourceDocument").GetString());
+        Assert.Equal("docs/aura/AURA_PROTOCOL_v2.2.md", payload.GetProperty("governedSourceDocument").GetString());
         Assert.True(payload.GetProperty("authenticationRequired").GetBoolean());
         Assert.False(string.IsNullOrWhiteSpace(payload.GetProperty("tokenEndpoint").GetString()));
         Assert.Equal("/api/project-control/projects/{projectCode}/roadmap", payload.GetProperty("roadmapEndpointTemplate").GetString());
         Assert.Equal("PUT /api/project-control/projects/{projectCode}/roadmap", payload.GetProperty("roadmapPlanEndpoint").GetString());
+        Assert.Equal("/api/agent-registration/events", payload.GetProperty("registrationEventsEndpoint").GetString());
+        Assert.Equal("INGESTION", payload.GetProperty("registrationCredentialActorType").GetString());
+        Assert.Equal("UNVERIFIED", payload.GetProperty("registrationIdentityStatus").GetString());
 
         var roles = payload.GetProperty("roles").EnumerateArray().Select(r => r.GetString()).ToArray();
         Assert.Contains("ANALYST", roles);
         Assert.Contains("CODING_AGENT", roles);
         Assert.Contains("AUTONOMOUS_AGENT", roles);
+        Assert.Contains("INGESTION", roles);
+
+        var modes = payload.GetProperty("modes").EnumerateArray().Select(r => r.GetString()).ToArray();
+        Assert.Contains("GOVERNED_EXECUTION", modes);
+        Assert.Contains("REGISTRATION_ONLY", modes);
     }
 
     [Fact]

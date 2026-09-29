@@ -9,7 +9,7 @@ Compatibility:  All agents (ANALYST, CODING_AGENT, AUTONOMOUS_AGENT), all AURA-c
 Supersedes:     docs/aura/AURA_PROTOCOL_v2.1.md @ 2.1
 ```
 
-This is the current full operational specification. It carries forward the authentication, tenant isolation, leases, optimistic concurrency, idempotency, and Project Memory separation established by v2.1, and adds a persistent ordered Roadmap with per-stage progress and designated AI_ANALYST approval. v2.1 remains available for audit but is no longer current.
+This remains the normative specification for `GOVERNED_EXECUTION`. It carries forward the authentication, tenant isolation, leases, optimistic concurrency, idempotency, and Project Memory separation established by v2.1, and adds a persistent ordered Roadmap with per-stage progress and designated AI_ANALYST approval. v2.1 remains available for audit but is no longer current. `AURA Agent Registration Protocol v2.3` adds the separate `REGISTRATION_ONLY` channel without replacing this document.
 
 ## 1. Changes in v2.2
 
@@ -19,24 +19,24 @@ This is the current full operational specification. It carries forward the authe
 | Stage progress | `stageCode` identifies a planned Roadmap stage; `stageProgress` remains 0–100. |
 | Approval | A planned stage is formally approved by its assigned, active `AI_ANALYST` credential, not by its CODER. Legacy stages without a Roadmap code retain the HUMAN approval rule. |
 | Outcome | Roadmap approval requires `stageOutcome = PASS` or `PASS_WITH_WARNINGS`; both close the milestone, warnings remain visible. |
-| Discovery | `GET /api/aura-protocol` reports v2.2 and its source document and exposes the Roadmap endpoints. |
+| Discovery | `GET /api/aura-protocol` now reports v2.3; `governedSourceDocument` continues to point here for `GOVERNED_EXECUTION` and exposes the Roadmap endpoints. |
 
 ## 2. Credentials and tokens
 
-`AgentCredential` registers a tenant-scoped identity (`HUMAN`, `AI_ANALYST`, or `CODER`, never `UNASSIGNED`), agent name, optional `LinkedActorId`, and a salted PBKDF2-SHA256 secret hash. Plaintext credential secrets are returned only at creation/rotation and must be stored securely.
+`AgentCredential` registers a tenant-scoped identity (`HUMAN`, `AI_ANALYST`, or `CODER`; v2.3 adds technical `INGESTION` credentials outside this governed contract, never `UNASSIGNED`), agent name, optional `LinkedActorId`, and a salted PBKDF2-SHA256 secret hash. New `INGESTION` credentials are additionally project-scoped through `AgentCredentialProject`; legacy tenant-wide rows are explicitly marked during transition. Project scope is enforced by `REGISTRATION_ONLY`, not by governed execution. Plaintext credential secrets are returned only at creation/rotation and must be stored securely.
 
 - `POST /api/admin/agent-credentials` creates a credential.
 - `POST /api/admin/agent-credentials/{id}/rotate?tenantId=n` rotates it.
 - `POST /api/admin/agent-credentials/{id}/revoke?tenantId=n` revokes it.
 - `GET /api/admin/agent-credentials?tenantId=n` returns metadata only.
 
-These administrative routes require `X-Admin-Api-Key`; they never return a secret except once during create/rotate.
+Credential administration uses the human portal JWT (`HUMAN`, signed source `PORTAL_LOGIN`) plus the tenant-specific allowlist `Admin:TenantAdminUserIds:<tenantId>`. `X-Admin-Api-Key` remains only for backend compatibility/break-glass calls and is never sent by the browser. Secrets are returned only once during create/rotate.
 
 `POST /api/auth/token` exchanges `{ tenantId, credentialId, secret }` for a short-lived Bearer JWT. `POST /api/auth/login` exchanges a human email/password for a human JWT. Never put a password, credential secret, JWT, connection string, or other secret in an event or Roadmap field.
 
 ## 3. Authentication and authorization
 
-All ProjectControl reads and writes require a Bearer JWT. The server derives actor type, tenant, credential ID and any linked actor ID from the validated token; body claims cannot override them. A tenant mismatch is forbidden. If the credential pins a `LinkedActorId`, the body actor ID must match.
+All ProjectControl reads and writes require a Bearer JWT. The server derives actor type, tenant, credential ID and any linked actor ID from the validated token; body claims cannot override them. A tenant mismatch is forbidden. If the credential pins a `LinkedActorId`, the body actor ID must match. `INGESTION` credentials introduced by v2.3 are excluded from governed writes and project administration.
 
 - `REQUEST` and Roadmap plan administration require an authenticated `HUMAN` credential.
 - A legacy `APPROVAL` without a Roadmap `stageCode` requires `HUMAN`.

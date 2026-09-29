@@ -3,8 +3,10 @@
 ## 1. Single-source principle
 
 The full text of the CURRENT version of AURA_PROTOCOL lives in exactly one place:
-**`docs/aura/AURA_PROTOCOL_v2.2.md`** today (plus its companions, `AGENT_INTEGRATION.md` and
-this file). Superseded versions (`AURA_PROTOCOL_v2.md`, `AURA_PROTOCOL_v2.1.md`) are kept for audit trail with an
+**`docs/aura/AURA_AGENT_REGISTRATION_PROTOCOL_v2.3.md`** today, for the additive
+`REGISTRATION_ONLY` mode, while **`docs/aura/AURA_PROTOCOL_v2.2.md`** remains the normative
+specification for `GOVERNED_EXECUTION` (plus `AGENT_INTEGRATION.md` and this file). Superseded
+versions (`AURA_PROTOCOL_v2.md`, `AURA_PROTOCOL_v2.1.md`) are kept for audit trail with an
 obsolescence header (§6) — never treated as current. It must never be copied in full into:
 
 - an agent's persistent/cross-session memory,
@@ -23,7 +25,9 @@ Two things must agree, and both are checked, not assumed:
    it answers even when SQL Server (and therefore `/api/project-control`) is unreachable, so an
    agent can always at least confirm which protocol version is current.
 2. **Document source**: the file named in that response's `sourceDocument` field
-   (`docs/aura/AURA_PROTOCOL_v2.2.md` today).
+   (`docs/aura/AURA_AGENT_REGISTRATION_PROTOCOL_v2.3.md` today). For governed execution the
+   companion `governedSourceDocument` field names `docs/aura/AURA_PROTOCOL_v2.2.md`, which is
+   still authoritative for that mode.
 
 There is deliberately **no third, independent source** (no separate config file, no DB table) —
 the task that designed v2.0 explicitly warned against multiple sources of protocol-version truth
@@ -36,7 +40,7 @@ trusting one and ignoring the other.
 | `status` | Meaning |
 |---|---|
 | `DESIGNED_PENDING_ACTIVATION` | Specification complete, no code yet (v2.0's original state). |
-| `IMPLEMENTED_PENDING_PRODUCTION_VERIFICATION` | Implemented and locally verified (tests + local smoke), but not yet deployed/verified in production and not yet the operational fallback for all agents. **This is the value today** (v2.2: Roadmap, stage progress, and designated AI_ANALYST approvals implemented locally; production deployment/verification remains pending). |
+| `IMPLEMENTED_PENDING_PRODUCTION_VERIFICATION` | Implemented and locally verified (tests + local smoke), but not yet deployed/verified in production and not yet the operational fallback for all agents. **This is the value today** (v2.3 adds `REGISTRATION_ONLY`; production deployment/verification remains pending, so production must still be treated as v2.2). |
 | `ACTIVE` | Activated: agents should treat this version as authoritative and `rules/AURA.md`'s pre-v2.x content as historical only. Not yet reached. |
 | `DEPRECATED` | A newer version now supersedes this one; kept readable for audit/history. |
 
@@ -65,12 +69,14 @@ PROJECT_CODE = <that project's sCodigo>
 convention is imposed — this repo's own `rules/AURA.md` + root `CLAUDE.md` pairing is one
 concrete instance of that pattern, not a name every consumer must replicate literally.
 
-## 5. Compatibility strategy for v2.2 / v3.0
+## 5. Compatibility strategy for v2.x / v3.0
 
 - **Minor versions (v2.x)**: additive to existing consumers. v2.1 added authentication and leases;
-  v2.2 adds Roadmap endpoints/fields and designated AI_ANALYST approvals for coded Roadmap stages.
-  Legacy stages and the existing event contract remain supported. Significant minor versions may
-  receive a new source file; v2.1 is retained with an obsolescence banner rather than edited in place.
+  v2.2 added Roadmap endpoints/fields and designated AI_ANALYST approvals for coded Roadmap stages;
+  v2.3 adds the separate `REGISTRATION_ONLY` ingestion channel. Legacy stages and the existing
+  `GOVERNED_EXECUTION` event contract remain supported. Significant minor versions may receive a
+  new source file; v2.1 is retained with an obsolescence banner rather than edited in place, while
+  v2.2 remains the normative source for governed execution under v2.3.
   `AuraProtocolMetadataProvider.Current.Version`/`SourceDocument`/`Supersedes` must be updated with
   the current document in the same change.
 - **Major versions (v3.0)**: may change contracts in breaking ways. Must add its own
@@ -107,7 +113,7 @@ is not yet `ACTIVE` (§3) and nothing should lose its only working fallback prem
 
 | Artifact | Versioning authority | Current value |
 |---|---|---|
-| Operational protocol | `AuraProtocolMetadataProvider.Current` plus its source document | `AURA_PROTOCOL v2.2` (status remains `IMPLEMENTED_PENDING_PRODUCTION_VERIFICATION`) |
+| Operational protocol | `AuraProtocolMetadataProvider.Current` plus its source document | `AURA_PROTOCOL v2.3` (`REGISTRATION_ONLY` additive, new credentials project-scoped; `GOVERNED_EXECUTION` remains v2.2) — status `IMPLEMENTED_PENDING_PRODUCTION_VERIFICATION` |
 | Project Memory semantics | `AURA_PROJECT_MEMORY` source document | `v1.0` — `STABLE` after Etapa 3 integration |
 | Project manifest structure | `schemas/project.schema.json` | `schemaVersion 1.0` |
 | Local machine profile structure | `schemas/machine.schema.json` | `schemaVersion 1.0` |

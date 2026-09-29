@@ -21,6 +21,7 @@ export const actorTypeLabels: Record<ProjectActorTypeCode, string> = {
   HUMAN: "Humano",
   AI_ANALYST: "Analista IA",
   CODER: "Codificador",
+  INGESTION: "Ingestión",
 };
 
 export const workStatusLabels: Record<ProjectWorkStatusCode, string> = {

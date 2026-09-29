@@ -50,6 +50,7 @@ public static class ProjectControlCodes
         ProjectActorType.Human => "HUMAN",
         ProjectActorType.AiAnalyst => "AI_ANALYST",
         ProjectActorType.Coder => "CODER",
+        ProjectActorType.Ingestion => "INGESTION",
         _ => throw new ArgumentOutOfRangeException(nameof(value), value, "Unknown ProjectActorType."),
     };
 
@@ -86,6 +87,7 @@ public static class ProjectControlCodes
             case "HUMAN": result = ProjectActorType.Human; return true;
             case "AI_ANALYST": result = ProjectActorType.AiAnalyst; return true;
             case "CODER": result = ProjectActorType.Coder; return true;
+            case "INGESTION": result = ProjectActorType.Ingestion; return true;
             default: result = default; return false;
         }
     }

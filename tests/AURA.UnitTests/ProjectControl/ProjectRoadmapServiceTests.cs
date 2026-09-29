@@ -23,6 +23,27 @@ public sealed class ProjectRoadmapServiceTests
     }
 
     [Fact]
+    public async Task RegisterEvent_IngestionCredentialCannotInvokeGovernedExecution()
+    {
+        var repository = new RecordingProjectControlRepository();
+        var service = new ProjectControlService(repository, new AgentLeaseOptions());
+        var request = CreateApprovalRequest("INGESTION") with
+        {
+            EventType = "CLAIM",
+            StageCode = null,
+            StageOutcome = null,
+        };
+
+        var result = await service.RegisterEventAsync(
+            request,
+            new AuthenticatedActor(1, 42, ProjectActorType.Ingestion, null, "ingestion"),
+            CancellationToken.None);
+
+        Assert.Equal(RegisterProjectEventStatus.Forbidden, result.Status);
+        Assert.Equal(0, repository.RegisterEventCalls);
+    }
+
+    [Fact]
     public async Task UpdateRoadmap_RequiresHumanAndUniqueCodes()
     {
         var repository = new RecordingProjectControlRepository();

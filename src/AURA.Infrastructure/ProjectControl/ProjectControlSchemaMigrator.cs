@@ -51,6 +51,52 @@ public sealed class ProjectControlSchemaMigrator(
         }
     }
 
+    public async Task ApplySchemaOnlyAsync(CancellationToken cancellationToken)
+    {
+        await dbContext.Database.OpenConnectionAsync(cancellationToken);
+        try
+        {
+            await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+            var connection = (SqlConnection)dbContext.Database.GetDbConnection();
+            var sqlTransaction = (SqlTransaction)transaction.GetDbTransaction();
+
+            await ApplySchemaAsync(connection, sqlTransaction, cancellationToken);
+            await VerifyRoadmapSchemaAsync(connection, sqlTransaction, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            logger.LogInformation("Project control schema applied and verified without seed data.");
+        }
+        finally
+        {
+            await dbContext.Database.CloseConnectionAsync();
+        }
+    }
+
+    private static async Task VerifyRoadmapSchemaAsync(SqlConnection connection, SqlTransaction transaction, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            "SELECT CASE WHEN OBJECT_ID('dbo.ProProyectoRoadmapRevision', 'U') IS NOT NULL " +
+            "AND OBJECT_ID('dbo.AgentRegistrationEvent', 'U') IS NOT NULL " +
+            "AND COL_LENGTH('dbo.ProProyectoEtapa', 'sCodigo') IS NOT NULL " +
+            "AND COL_LENGTH('dbo.ProProyectoEtapa', 'sCriteriosAceptacion') IS NOT NULL " +
+            "AND COL_LENGTH('dbo.ProProyectoEtapa', 'IdCredentialValidador') IS NOT NULL " +
+            "AND COL_LENGTH('dbo.ProProyectoEtapa', 'IdCredentialAprobador') IS NOT NULL " +
+            "AND COL_LENGTH('dbo.ProProyectosItems', 'sCodigoEtapa') IS NOT NULL " +
+            "AND COL_LENGTH('dbo.ProProyectosItems', 'sResultadoEtapa') IS NOT NULL " +
+            "AND COL_LENGTH('dbo.ProProyectosCabecera', 'sExternalProjectKey') IS NOT NULL " +
+            "AND COL_LENGTH('dbo.ProProyectosCabecera', 'dFecModificacion') IS NOT NULL " +
+            "AND COL_LENGTH('dbo.AgentCredential', 'ScopeMode') IS NOT NULL " +
+            "AND OBJECT_ID('dbo.AgentCredentialProject', 'U') IS NOT NULL " +
+            "AND OBJECT_ID('dbo.AuraAdminAudit', 'U') IS NOT NULL " +
+            "AND EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.ProProyectoEtapa') " +
+            "AND name = 'UX_ProProyectoEtapa_Tenant_Project_Exec_Code') THEN 1 ELSE 0 END;";
+        if (Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken)) != 1)
+        {
+            throw new InvalidOperationException("La verificación del esquema Roadmap no encontró todos los objetos esperados.");
+        }
+    }
+
     private static async Task ApplySchemaAsync(SqlConnection connection, SqlTransaction transaction, CancellationToken cancellationToken)
     {
         var statements = new[]
@@ -63,6 +109,22 @@ public sealed class ProjectControlSchemaMigrator(
             """
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosCabecera') AND name = 'sRepositorio')
                 ALTER TABLE dbo.ProProyectosCabecera ADD sRepositorio nvarchar(1000) NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosCabecera') AND name = 'sExternalProjectKey')
+                ALTER TABLE dbo.ProProyectosCabecera ADD sExternalProjectKey nvarchar(200) NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosCabecera') AND name = 'dFecModificacion')
+                ALTER TABLE dbo.ProProyectosCabecera ADD dFecModificacion datetime2 NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosCabecera') AND name = 'nUsuarioCreador')
+                ALTER TABLE dbo.ProProyectosCabecera ADD nUsuarioCreador int NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ProProyectosCabecera') AND name = 'nUsuarioModificacion')
+                ALTER TABLE dbo.ProProyectosCabecera ADD nUsuarioModificacion int NULL;
             """,
 
             // ProProyectosItems additive columns
@@ -307,8 +369,131 @@ public sealed class ProjectControlSchemaMigrator(
                     RevokedAtUtc datetime2 NULL,
                     LastUsedAtUtc datetime2 NULL,
                     RotatedFromCredentialId int NULL,
-                    CONSTRAINT PK_AgentCredential PRIMARY KEY (idTenant, IdCredential)
+                    ScopeMode varchar(30) NOT NULL CONSTRAINT DF_AgentCredential_ScopeMode DEFAULT ('LEGACY_TENANT_WIDE'),
+                    ExpiresAtUtc datetime2 NULL,
+                    CreatedByUserId int NULL,
+                    UpdatedAtUtc datetime2 NULL,
+                    UpdatedByUserId int NULL,
+                    CONSTRAINT PK_AgentCredential PRIMARY KEY (idTenant, IdCredential),
+                    CONSTRAINT CK_AgentCredential_ScopeMode CHECK (ScopeMode IN ('LEGACY_TENANT_WIDE', 'PROJECT_SCOPED', 'NOT_APPLICABLE'))
                 );
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AgentCredential') AND name = 'ScopeMode')
+                ALTER TABLE dbo.AgentCredential ADD ScopeMode varchar(30) NOT NULL CONSTRAINT DF_AgentCredential_ScopeMode DEFAULT ('LEGACY_TENANT_WIDE') WITH VALUES;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE parent_object_id = OBJECT_ID('dbo.AgentCredential') AND name = 'CK_AgentCredential_ScopeMode')
+                ALTER TABLE dbo.AgentCredential ADD CONSTRAINT CK_AgentCredential_ScopeMode CHECK (ScopeMode IN ('LEGACY_TENANT_WIDE', 'PROJECT_SCOPED', 'NOT_APPLICABLE'));
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AgentCredential') AND name = 'ExpiresAtUtc')
+                ALTER TABLE dbo.AgentCredential ADD ExpiresAtUtc datetime2 NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AgentCredential') AND name = 'CreatedByUserId')
+                ALTER TABLE dbo.AgentCredential ADD CreatedByUserId int NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AgentCredential') AND name = 'UpdatedAtUtc')
+                ALTER TABLE dbo.AgentCredential ADD UpdatedAtUtc datetime2 NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AgentCredential') AND name = 'UpdatedByUserId')
+                ALTER TABLE dbo.AgentCredential ADD UpdatedByUserId int NULL;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'AgentCredentialProject' AND schema_id = SCHEMA_ID('dbo'))
+                CREATE TABLE dbo.AgentCredentialProject (
+                    IdAssignment bigint IDENTITY(1,1) NOT NULL,
+                    idTenant int NOT NULL,
+                    IdCredential int NOT NULL,
+                    IdProyecto int NOT NULL,
+                    Activo bit NOT NULL,
+                    AssignedAtUtc datetime2 NOT NULL,
+                    RevokedAtUtc datetime2 NULL,
+                    AssignedByUserId int NULL,
+                    RevokedByUserId int NULL,
+                    CONSTRAINT CK_AgentCredentialProject_Status CHECK ((Activo = 1 AND RevokedAtUtc IS NULL) OR (Activo = 0 AND RevokedAtUtc IS NOT NULL)),
+                    CONSTRAINT PK_AgentCredentialProject PRIMARY KEY (IdAssignment),
+                    CONSTRAINT FK_AgentCredentialProject_Credential FOREIGN KEY (idTenant, IdCredential)
+                        REFERENCES dbo.AgentCredential (idTenant, IdCredential),
+                    CONSTRAINT FK_AgentCredentialProject_Project FOREIGN KEY (idTenant, IdProyecto)
+                        REFERENCES dbo.ProProyectosCabecera (idTenant, IdProyecto)
+                );
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.AgentCredentialProject') AND name = 'UX_AgentCredentialProject_Active')
+                CREATE UNIQUE INDEX UX_AgentCredentialProject_Active ON dbo.AgentCredentialProject (idTenant, IdCredential, IdProyecto) WHERE Activo = 1;
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.AgentCredentialProject') AND name = 'IX_AgentCredentialProject_Tenant_Credential')
+                CREATE INDEX IX_AgentCredentialProject_Tenant_Credential ON dbo.AgentCredentialProject (idTenant, IdCredential, AssignedAtUtc) INCLUDE (IdProyecto, Activo, RevokedAtUtc, AssignedByUserId, RevokedByUserId);
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'AuraAdminAudit' AND schema_id = SCHEMA_ID('dbo'))
+                CREATE TABLE dbo.AuraAdminAudit (
+                    IdAudit bigint IDENTITY(1,1) NOT NULL,
+                    idTenant int NOT NULL,
+                    OperationCode varchar(60) NOT NULL,
+                    TargetType varchar(40) NOT NULL,
+                    TargetId nvarchar(100) NOT NULL,
+                    ActorUserId int NULL,
+                    OccurredAtUtc datetime2 NOT NULL,
+                    CONSTRAINT PK_AuraAdminAudit PRIMARY KEY (IdAudit)
+                );
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.AuraAdminAudit') AND name = 'IX_AuraAdminAudit_Tenant_Time')
+                CREATE INDEX IX_AuraAdminAudit_Tenant_Time ON dbo.AuraAdminAudit (idTenant, OccurredAtUtc);
+            """,
+
+            // --- AURA Agent Registration Protocol v2.3: append-only registration events ---
+            // Separate from ProProyectosItems so REGISTRATION_ONLY can never mutate board,
+            // Roadmap, EXEC, workstream, lease, approval, or governed execution state.
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'AgentRegistrationEvent' AND schema_id = SCHEMA_ID('dbo'))
+                CREATE TABLE dbo.AgentRegistrationEvent (
+                    IdItem bigint IDENTITY(1,1) NOT NULL,
+                    IdEvento uniqueidentifier NOT NULL,
+                    idTenant int NOT NULL,
+                    IdProyecto int NULL,
+                    sCodigoProyecto varchar(50) NOT NULL,
+                    sExternalProjectKey nvarchar(200) NULL,
+                    sProjectName nvarchar(200) NULL,
+                    sMode varchar(30) NOT NULL,
+                    sTipoEvento varchar(30) NOT NULL,
+                    sResumen nvarchar(300) NOT NULL,
+                    sDetalles nvarchar(4000) NULL,
+                    sClaimedActorType varchar(30) NULL,
+                    nClaimedActorId int NULL,
+                    sAgentName nvarchar(100) NULL,
+                    sHost nvarchar(100) NULL,
+                    sWorkspace nvarchar(300) NULL,
+                    SessionId uniqueidentifier NULL,
+                    sModel nvarchar(100) NULL,
+                    sEnvironment nvarchar(100) NULL,
+                    sSource nvarchar(100) NULL,
+                    OccurredAtUtc datetime2 NOT NULL,
+                    RegisteredAtUtc datetime2 NOT NULL,
+                    sIdentityStatus varchar(20) NOT NULL,
+                    sProjectResolution varchar(20) NOT NULL,
+                    IdCredential int NOT NULL,
+                    CONSTRAINT PK_AgentRegistrationEvent PRIMARY KEY (IdItem),
+                    CONSTRAINT UQ_AgentRegistrationEvent_Tenant_Event UNIQUE (idTenant, IdEvento),
+                    CONSTRAINT FK_AgentRegistrationEvent_Credential FOREIGN KEY (idTenant, IdCredential)
+                        REFERENCES dbo.AgentCredential (idTenant, IdCredential),
+                    CONSTRAINT CK_AgentRegistrationEvent_Mode CHECK (sMode = 'REGISTRATION_ONLY'),
+                    CONSTRAINT CK_AgentRegistrationEvent_Identity CHECK (sIdentityStatus = 'UNVERIFIED'),
+                    CONSTRAINT CK_AgentRegistrationEvent_Resolution CHECK (sProjectResolution IN ('RESOLVED', 'PROVISIONAL')),
+                    CONSTRAINT CK_AgentRegistrationEvent_Type CHECK (sTipoEvento IN
+                        ('INFO', 'PROGRESS', 'DECISION', 'BLOCKER', 'HANDOFF', 'REQUEST', 'NOTE', 'ERROR'))
+                );
+            """,
+            """
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.AgentRegistrationEvent') AND name = 'IX_AgentRegistrationEvent_Tenant_Project_Registered')
+                CREATE INDEX IX_AgentRegistrationEvent_Tenant_Project_Registered
+                    ON dbo.AgentRegistrationEvent (idTenant, sCodigoProyecto, RegisteredAtUtc);
             """,
 
             // --- Login básico de humanos (2026-08-28): email + contraseña sobre Usuarios ---

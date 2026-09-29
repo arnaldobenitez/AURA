@@ -9,7 +9,7 @@ public sealed class AgentCredentialService(IAgentCredentialRepository repository
     private const int SecretByteLength = 32;
     private const int AgentNameMaxLength = 100;
 
-    public async Task<CreateAgentCredentialResult> CreateAsync(CreateAgentCredentialRequest request, CancellationToken cancellationToken)
+    public async Task<CreateAgentCredentialResult> CreateAsync(CreateAgentCredentialRequest request, CancellationToken cancellationToken, int? createdByUserId = null)
     {
         var errors = new List<string>();
 
@@ -20,7 +20,11 @@ public sealed class AgentCredentialService(IAgentCredentialRepository repository
 
         if (!TryParseActorType(request.ActorType, out var actorType) || actorType == ProjectActorType.Unassigned)
         {
-            errors.Add("actorType debe ser HUMAN, AI_ANALYST o CODER.");
+            errors.Add("actorType debe ser HUMAN, AI_ANALYST, CODER o INGESTION.");
+        }
+        else if (actorType == ProjectActorType.Ingestion)
+        {
+            errors.Add("INGESTION requiere proyectos asociados; utilice el flujo administrativo con scope por proyecto.");
         }
 
         if (string.IsNullOrWhiteSpace(request.AgentName))
@@ -62,7 +66,8 @@ public sealed class AgentCredentialService(IAgentCredentialRepository repository
                 hash,
                 Pbkdf2PasswordHasher.Iterations,
                 DateTime.UtcNow,
-                null),
+                null,
+                createdByUserId),
             cancellationToken);
 
         return new CreateAgentCredentialResult(CreateAgentCredentialStatus.Created, credentialId, plainSecret, null);
@@ -74,6 +79,10 @@ public sealed class AgentCredentialService(IAgentCredentialRepository repository
         if (existing is null)
         {
             return new CreateAgentCredentialResult(CreateAgentCredentialStatus.ValidationFailed, null, null, ["Credencial no encontrada."]);
+        }
+        if (existing.ActorType == ProjectActorType.Ingestion)
+        {
+            return new CreateAgentCredentialResult(CreateAgentCredentialStatus.ValidationFailed, null, null, ["Las credenciales INGESTION deben rotarse mediante el flujo administrativo con scope por proyecto."]);
         }
 
         await repository.RevokeAsync(tenantId, credentialId, cancellationToken);
@@ -119,7 +128,7 @@ public sealed class AgentCredentialService(IAgentCredentialRepository repository
             return new IssueAccessTokenResult(IssueAccessTokenStatus.InvalidCredential, null, null);
         }
 
-        if (record.RevokedAtUtc is not null)
+        if (record.RevokedAtUtc is not null || record.ExpiresAtUtc is { } credentialExpiry && credentialExpiry <= DateTime.UtcNow)
         {
             return new IssueAccessTokenResult(IssueAccessTokenStatus.Revoked, null, null);
         }
@@ -154,6 +163,7 @@ public sealed class AgentCredentialService(IAgentCredentialRepository repository
             case "HUMAN": result = ProjectActorType.Human; return true;
             case "AI_ANALYST": result = ProjectActorType.AiAnalyst; return true;
             case "CODER": result = ProjectActorType.Coder; return true;
+            case "INGESTION": result = ProjectActorType.Ingestion; return true;
             default: result = ProjectActorType.Unassigned; return false;
         }
     }

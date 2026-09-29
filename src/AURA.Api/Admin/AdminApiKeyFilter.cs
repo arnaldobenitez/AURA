@@ -1,30 +1,41 @@
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc.Filters;
 
 namespace AURA.Api.Admin;
 
 /// <summary>
-/// Guards the credential-administration endpoints (create/revoke/rotate/list AgentCredential)
-/// with a static admin API key - deliberately not JWT, since bootstrapping the very first
-/// credential can't require an already-issued token. See docs/aura/AURA_PROTOCOL_v2.1.md
-/// "Administración de credenciales" for why a full admin UI/role system was not built this pass.
+/// Protects administrative endpoints with a configured tenant-admin human JWT for the portal,
+/// while retaining the static admin API key solely for backend compatibility/break-glass calls.
+/// The API key is never intended for browser use.
 /// </summary>
-public sealed class AdminApiKeyFilter(IConfiguration configuration, IHostEnvironment environment) : IAsyncActionFilter
+public sealed class AdminApiKeyFilter(
+    IConfiguration configuration,
+    IHostEnvironment environment,
+    IAuthorizationService authorizationService) : IAsyncActionFilter
 {
     public const string DevelopmentOnlyPlaceholder = "DEV-ONLY-INSECURE-ADMIN-KEY-NOT-FOR-PRODUCTION";
     private const string HeaderName = "X-Admin-Api-Key";
 
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
+        var isAuthenticated = context.HttpContext.User.Identity?.IsAuthenticated == true;
+        if (isAuthenticated && (await authorizationService.AuthorizeAsync(context.HttpContext.User, null, "AuraTenantAdmin")).Succeeded)
+        {
+            await next();
+            return;
+        }
+
         var configuredKey = configuration["Admin:ApiKey"];
         if (string.IsNullOrWhiteSpace(configuredKey))
         {
             if (!environment.IsDevelopment())
             {
-                throw new InvalidOperationException(
-                    "Admin:ApiKey no está configurado. Fuera de Development debe configurarse a mano " +
-                    "antes de exponer los endpoints de administración de credenciales.");
+                context.Result = isAuthenticated
+                    ? new Microsoft.AspNetCore.Mvc.ForbidResult()
+                    : new Microsoft.AspNetCore.Mvc.UnauthorizedResult();
+                return;
             }
 
             configuredKey = DevelopmentOnlyPlaceholder;
@@ -33,7 +44,9 @@ public sealed class AdminApiKeyFilter(IConfiguration configuration, IHostEnviron
         if (!context.HttpContext.Request.Headers.TryGetValue(HeaderName, out var suppliedValues) ||
             !FixedTimeEquals(suppliedValues.ToString(), configuredKey))
         {
-            context.Result = new Microsoft.AspNetCore.Mvc.UnauthorizedResult();
+            context.Result = isAuthenticated
+                ? new Microsoft.AspNetCore.Mvc.ForbidResult()
+                : new Microsoft.AspNetCore.Mvc.UnauthorizedResult();
             return;
         }
 

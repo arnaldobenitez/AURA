@@ -6,11 +6,10 @@ using AURA.Domain.ProjectControl;
 namespace AURA.Application.HumanLogin;
 
 /// <summary>
-/// Basic web login: email+password against Usuarios, tenant hardcoded to 1. Issues the same
-/// kind of JWT AgentCredential tokens use (ActorType=Human, LinkedActorId=IdUsuario) via the
-/// same IAccessTokenIssuer - a human's browser session and a HUMAN AgentCredential are both
-/// just "a HUMAN-typed bearer token" to everything downstream. No roles/permissions inside the
-/// app yet by design (see the request this was built for) - a valid login only gates viewing.
+/// Basic web login: email+password against Usuarios, tenant hardcoded to 1. Issues a HUMAN JWT
+/// through the shared token issuer and marks its authentication source so the admin portal can
+/// distinguish this login from a technical HUMAN AgentCredential. Tenant-admin authorization is
+/// configured separately; a valid login alone grants no administrative permission.
 /// </summary>
 public sealed class HumanLoginService(IHumanLoginRepository repository, IAccessTokenIssuer tokenIssuer)
 {
@@ -37,7 +36,7 @@ public sealed class HumanLoginService(IHumanLoginRepository repository, IAccessT
         }
 
         var (accessToken, expiresAtUtc) = tokenIssuer.Issue(new AuthenticatedActor(
-            record.TenantId, record.UserId, ProjectActorType.Human, record.UserId, record.Name));
+            record.TenantId, record.UserId, ProjectActorType.Human, record.UserId, record.Name, AuraJwtClaimTypes.PortalLogin));
 
         return new HumanLoginResult(HumanLoginStatus.Success, accessToken, expiresAtUtc, record.Name);
     }
